@@ -78,8 +78,12 @@ public static class GpuArchitectureCatalog
         var shader = "Unknown";
         var supported = false;
         var newer = false;
+        var identified = false;
         if (vendor == GpuVendor.Nvidia && DeviceIds.TryGetValue(adapter.DeviceId, out var known))
+        {
             (architecture, capability, shader, supported, newer) = known;
+            identified = true;
+        }
         foreach (var pattern in Patterns)
         {
             if (!pattern.Pattern.IsMatch(adapter.Name))
@@ -89,15 +93,8 @@ public static class GpuArchitectureCatalog
             shader = pattern.Shader;
             supported = pattern.Supported;
             newer = pattern.Newer;
+            identified = true;
             break;
-        }
-        if (vendor == GpuVendor.Nvidia && !supported && adapter.Name.Contains("RTX", StringComparison.OrdinalIgnoreCase) && architecture == "Unknown")
-        {
-            architecture = "NVIDIA RTX (unlisted model)";
-            capability = "Unverified";
-            shader = "Unverified";
-            supported = true;
-            newer = true;
         }
 
         var discrete = vendor is GpuVendor.Nvidia or GpuVendor.Amd && adapter.DedicatedVideoMemory >= 512L * 1024 * 1024;
@@ -121,6 +118,7 @@ public static class GpuArchitectureCatalog
             IsDiscrete = discrete,
             IsSupportedRtx = supported,
             IsNewerArchitecture = newer,
+            ArchitectureIdentified = identified,
             DriverVersion = driverVersion,
             Luid = adapter.Luid
         };
@@ -147,11 +145,14 @@ public sealed class SystemCompatibilityService : ISystemCompatibilityService
         else if (!namedClient)
             reasons.Add("The operating system build looks like Windows 10 or 11, but the product name did not confirm it.");
 
-        var unsupportedGpu = primary == null || primary.Vendor != GpuVendor.Nvidia || !primary.IsSupportedRtx;
+        var unknownArchitecture = primary is { Vendor: GpuVendor.Nvidia, ArchitectureIdentified: false };
+        var unsupportedGpu = primary == null || primary.Vendor != GpuVendor.Nvidia || (!primary.IsSupportedRtx && !unknownArchitecture);
         if (primary == null)
             reasons.Add("No graphics adapter was detected.");
         else if (primary.Vendor != GpuVendor.Nvidia)
             reasons.Add($"{primary.Name} is not an NVIDIA GPU. DLSSG for SM86 only runs on NVIDIA RTX GPUs.");
+        else if (unknownArchitecture)
+            reasons.Add($"{primary.Name} is an NVIDIA adapter, but its architecture was not identified from the device id or a known model name. It is not treated as supported.");
         else if (!primary.IsSupportedRtx)
             reasons.Add($"{primary.Name} is not an RTX 20, 30, 40, or 50-series GPU. Upstream support is RTX 20 (SM75) and RTX 30 (SM86), and 0.4.0 also enables an unvalidated route on RTX 40 (SM89) and RTX 50 (SM120).");
         else
@@ -169,7 +170,7 @@ public sealed class SystemCompatibilityService : ISystemCompatibilityService
         var driverKnown = NvidiaDriverVersion.TryParse(driver, out var parsed);
         var driverTooOld = false;
         var driverPtxOnly = false;
-        if (primary is { Vendor: GpuVendor.Nvidia, IsSupportedRtx: true })
+        if (primary is { Vendor: GpuVendor.Nvidia } && (primary.IsSupportedRtx || unknownArchitecture))
         {
             if (!driverKnown)
                 reasons.Add("An NVIDIA driver version could not be read. NGX, NVAPI, and CUDA support could not be verified.");
@@ -204,7 +205,7 @@ public sealed class SystemCompatibilityService : ISystemCompatibilityService
             status = SystemCompatibilityStatus.Unsupported;
         else if (snapshot.HagsEnabled == false || driverTooOld)
             status = SystemCompatibilityStatus.ActionRequired;
-        else if (primary!.IsNewerArchitecture || driverPtxOnly || snapshot.HagsEnabled == null || !driverKnown)
+        else if (unknownArchitecture || primary!.IsNewerArchitecture || driverPtxOnly || snapshot.HagsEnabled == null || !driverKnown)
             status = SystemCompatibilityStatus.PotentiallyCompatible;
         else
             status = SystemCompatibilityStatus.Compatible;

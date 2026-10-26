@@ -203,8 +203,14 @@ public static class ZipExtractor
     {
         Directory.CreateDirectory(destination);
         using var zip = ZipFile.OpenRead(archive);
+        if (zip.Entries.Count > 4000)
+            throw new InvalidOperationException("The archive has more entries than a DLSSG release package should.");
+        long total = 0;
         foreach (var entry in zip.Entries)
         {
+            total += entry.Length;
+            if (total > 1024L * 1024 * 1024)
+                throw new InvalidOperationException("The archive expands beyond the 1 GB limit.");
             if (string.IsNullOrEmpty(entry.Name) && entry.FullName.EndsWith('/'))
             {
                 if (PathSafety.IsUnsafeRelative(entry.FullName.TrimEnd('/')))
@@ -492,6 +498,20 @@ public sealed class ReleaseService : IReleaseService
             Signature = signature,
             Sha256 = Hashing.Sha256File(archive)
         };
+    }
+
+    public async Task<string> DownloadManagerPackageAsync(ModRelease release, string directory, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        var asset = release.Assets.FirstOrDefault(item =>
+            item.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+            item.Name.Contains("win-x64", StringComparison.OrdinalIgnoreCase) &&
+            item.Name.Contains("DLSSGManager", StringComparison.OrdinalIgnoreCase));
+        if (asset == null)
+            throw new InvalidOperationException("This DLSSG Manager release does not include a DLSSGManager win-x64 zip. Use the release page instead.");
+        Directory.CreateDirectory(directory);
+        var destination = Path.Combine(directory, asset.Name);
+        await _client.DownloadAsync(asset, destination, progress, cancellationToken).ConfigureAwait(false);
+        return destination;
     }
 
     private async Task<(ModRelease? Release, string Message, bool Update)> ReadManagerAsync(AppSettings settings, CancellationToken cancellationToken)

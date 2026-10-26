@@ -84,7 +84,32 @@ public static class PathSafety
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
             !full.Equals(rootFull, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Path escapes the target directory: {relative}");
+        RejectEscapingLink(rootFull, full);
         return full;
+    }
+
+    private static void RejectEscapingLink(string rootFull, string full)
+    {
+        var prefix = rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var relative = Path.GetRelativePath(rootFull, full);
+        var current = rootFull;
+        foreach (var part in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (part is "" or ".")
+                continue;
+            current = Path.Combine(current, part);
+            if (!File.Exists(current) && !Directory.Exists(current))
+                continue;
+            var attributes = File.GetAttributes(current);
+            if ((attributes & FileAttributes.ReparsePoint) == 0)
+                continue;
+            var link = Directory.Exists(current) ? new DirectoryInfo(current).LinkTarget : new FileInfo(current).LinkTarget;
+            if (string.IsNullOrWhiteSpace(link))
+                continue;
+            var resolved = Path.GetFullPath(Path.IsPathRooted(link) ? link : Path.Combine(Path.GetDirectoryName(current)!, link));
+            if (!resolved.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !resolved.Equals(rootFull, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Refusing a link that points outside the target directory: " + current);
+        }
     }
 
     public static bool IsProtectedGamePath(string path)

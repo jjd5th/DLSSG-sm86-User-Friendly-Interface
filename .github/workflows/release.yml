@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore DLSSGManager.sln
+
+      - name: Build
+        run: dotnet build DLSSGManager.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test DLSSGManager.sln -c Release --no-build --verbosity minimal
+
+      - name: Publish
+        run: dotnet publish src/DLSSGManager.App/DLSSGManager.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugSymbols=false -p:DebugType=none -o ${{ runner.temp }}/dlssg-stage
+
+      - name: Assemble the portable ZIP
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "dlssg-stage"
+          Get-ChildItem $stage -Filter *.pdb -Recurse | Remove-Item -Force
+          $exe = Join-Path $stage "DLSSGManager.exe"
+          if (-not (Test-Path $exe)) { throw "DLSSGManager.exe was not published." }
+          if ((Get-Item $exe).Length -lt 20MB) { throw "DLSSGManager.exe is too small to contain the runtime." }
+          Copy-Item README.md $stage
+          Copy-Item LICENSE $stage
+          $zip = Join-Path $env:RUNNER_TEMP "DLSSGManager-${{ github.ref_name }}-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path (Join-Path $env:RUNNER_TEMP "SHA256SUMS.txt") -Value "$hash  DLSSGManager-${{ github.ref_name }}-win-x64.zip"
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+          "hash=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ runner.temp }}/DLSSGManager-${{ github.ref_name }}-win-x64.zip
+            ${{ runner.temp }}/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            DLSSG Manager ${{ github.ref_name }} for Windows 10/11 x64.
+
+            Extract the ZIP and run `DLSSGManager.exe`. The .NET SDK is not required.
+
+            SHA-256 is in `SHA256SUMS.txt`. Windows SmartScreen may warn about an unsigned download. Do not disable Windows security to run this program.
+
+            This package updates DLSSG Manager. DLSSG for SM86 mod packages are downloaded separately from https://github.com/sdli1995/dlssg_for_sm86/releases when you install or update a game.

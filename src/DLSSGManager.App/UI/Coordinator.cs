@@ -67,6 +67,23 @@ public sealed class LibraryCoordinator
             await ScanAsync(CancellationToken.None);
         else
             await RefreshInstallStatesAsync();
+        if (!Session.Settings.SetupShown)
+        {
+            var gpu = Session.SystemReport?.PrimaryGpu;
+            var games = Session.Games.Count(item => !item.Record.Excluded);
+            var likely = Session.Games.Count(item => item.Record.Compatibility?.Status is GameCompatibilityStatus.Confirmed or GameCompatibilityStatus.Likely);
+            _prompt.Info("DLSSG Manager",
+                "DLSSG Manager is ready.\n\n" +
+                "GPU: " + (gpu == null ? "not detected" : gpu.Name) + "\n" +
+                "System: " + (Session.SystemReport?.Summary ?? "not checked") + "\n" +
+                "HAGS: " + (Session.SystemReport?.HagsEnabled switch { true => "on", false => "off", _ => "unknown" }) + "\n" +
+                "Games found: " + games + "\n" +
+                "Confirmed or likely: " + likely + "\n" +
+                "Mod release: " + (Session.Releases?.Selected?.Tag ?? "not checked") + "\n\n" +
+                "Installed files do not mean frame generation is running. Settings and backups stay in %LOCALAPPDATA%\\DLSSGManager.");
+            Session.Settings.SetupShown = true;
+            _store.SaveSettings(Session.Settings);
+        }
     }
 
     public async Task RefreshHardwareAsync()
@@ -237,7 +254,7 @@ public sealed class LibraryCoordinator
                 AllowLowConfidenceExecutable = true,
                 AllowUncertainManifest = true,
                 OverwriteConflicts = choice.OverwriteConflicts || conflicts.Count == 0,
-                RemoveUnownedProxies = choice.RemoveExtraProxies,
+                ApprovedRemovals = choice.ApprovedRemovals,
                 ProxyFileName = choice.Proxy,
                 IsUpdate = update || item.Record.Installation?.State == ModInstallState.UpdateAvailable
             }, CancellationToken.None));
@@ -457,6 +474,35 @@ public sealed class LibraryCoordinator
             "4. Restart Windows.\n\n" +
             (Session.SystemReport?.HagsDetail ?? ""));
         OpenGraphicsSettings();
+    }
+
+    public async Task DownloadManagerUpdateAsync()
+    {
+        var release = Session.Releases?.ManagerLatest;
+        if (release == null)
+        {
+            _prompt.Info("DLSSG Manager", "No DLSSG Manager release is available to download.");
+            return;
+        }
+        var folder = _prompt.PickFolder();
+        if (folder == null)
+            return;
+        Session.IsBusy = true;
+        Session.StatusText = "Downloading DLSSG Manager " + release.Tag + "…";
+        try
+        {
+            var path = await _releases.DownloadManagerPackageAsync(release, folder, null, CancellationToken.None);
+            _prompt.Info("DLSSG Manager", "Saved " + path + ".\n\nClose this copy, extract the ZIP to a different folder, and run the new DLSSGManager.exe. Settings and backups stay in %LOCALAPPDATA%\\DLSSGManager. This program does not replace the EXE that is running.");
+        }
+        catch (Exception ex)
+        {
+            _prompt.Error("DLSSG Manager", ex.Message);
+            OpenReleasePage(release.HtmlUrl);
+        }
+        finally
+        {
+            Session.IsBusy = false;
+        }
     }
 
     public void OpenReleasePage(string? url)

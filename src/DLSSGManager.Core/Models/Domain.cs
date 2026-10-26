@@ -79,6 +79,7 @@ public sealed class GpuDevice
     public bool IsDiscrete { get; init; }
     public bool IsSupportedRtx { get; init; }
     public bool IsNewerArchitecture { get; init; }
+    public bool ArchitectureIdentified { get; init; }
     public string? DriverVersion { get; init; }
     public long Luid { get; init; }
     public string MemoryText => DedicatedVideoMemory == 0
@@ -202,6 +203,7 @@ public sealed class OwnedFileRecord
     public string? OriginalSha256 { get; set; }
     public string? BackupPath { get; set; }
     public bool IsConfiguration { get; set; }
+    public bool IntentionallyAbsent { get; set; }
 }
 
 public sealed class OperationLogEntry
@@ -234,6 +236,7 @@ public sealed class AppSettings
     public int LogRetentionDays { get; set; } = 14;
     public string Theme { get; set; } = "Dark";
     public bool DiagnosticLogging { get; set; } = true;
+    public bool SetupShown { get; set; }
     public string ModRepository { get; set; } = "sdli1995/dlssg_for_sm86";
     public string ManagerRepository { get; set; } = "jjd5th/DLSSG_Manager_UI";
     public DateTimeOffset? LastScanUtc { get; set; }
@@ -390,6 +393,7 @@ public sealed class InstallRequest
     public bool AllowUncertainManifest { get; init; }
     public bool OverwriteConflicts { get; init; }
     public bool RemoveUnownedProxies { get; init; }
+    public IReadOnlyList<string> ApprovedRemovals { get; init; } = [];
     public string? ProxyFileName { get; init; }
     public string? ConfigurationText { get; init; }
     public bool IsUpdate { get; set; }

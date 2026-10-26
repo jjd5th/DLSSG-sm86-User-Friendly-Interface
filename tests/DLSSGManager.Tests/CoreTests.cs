@@ -57,6 +57,10 @@ public class CoreTests : IDisposable
         Assert.Equal(SystemCompatibilityStatus.PotentiallyCompatible, service.Evaluate(Snap("NVIDIA GeForce RTX 4090", "617.14", true)).Status);
         Assert.Equal(SystemCompatibilityStatus.ActionRequired, service.Evaluate(Snap("NVIDIA GeForce RTX 3070", "617.14", false)).Status);
         Assert.Equal(SystemCompatibilityStatus.Unsupported, service.Evaluate(Snap("AMD Radeon RX 6800", "31.0.1", true, 0x1002)).Status);
+        var mystery = GpuArchitectureCatalog.Describe(new RawGpuAdapter { Name = "NVIDIA GeForce RTX 9999", VendorId = 0x10DE, DedicatedVideoMemory = 8L << 30 }, "617.14");
+        Assert.False(mystery.IsSupportedRtx);
+        Assert.False(mystery.ArchitectureIdentified);
+        Assert.Equal(SystemCompatibilityStatus.PotentiallyCompatible, service.Evaluate(Snap("NVIDIA GeForce RTX 9999", "617.14", true)).Status);
         Assert.Equal(SystemCompatibilityStatus.PotentiallyCompatible, service.Evaluate(Snap("NVIDIA GeForce RTX 3080", "560.94", true)).Status);
         Assert.Equal(SystemCompatibilityStatus.ActionRequired, service.Evaluate(Snap("NVIDIA GeForce RTX 3080", "536.23", true)).Status);
     }
@@ -320,6 +324,85 @@ public class CoreTests : IDisposable
         File.WriteAllText(Path.Combine(harness.Paths.Journals, journal.Id + ".json"), JsonSerializer.Serialize(journal));
         Assert.Equal(1, harness.Service.RecoverInterrupted());
         Assert.False(File.Exists(partial));
+    }
+
+    [Fact]
+    public void Consecutive_updates_keep_the_pristine_original_and_a_stable_ownership_marker()
+    {
+        var harness = CreateHarness();
+        var gameDir = Path.Combine(_root, "updates");
+        Directory.CreateDirectory(gameDir);
+        var exe = Path.Combine(gameDir, "game.exe");
+        File.WriteAllBytes(exe, [1]);
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), "ORIG"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(gameDir, "winmm.dll"), "OTHER"u8.ToArray());
+        var game = TestGame(gameDir, exe);
+        var first = PackageFor(CreatePackage("0.4.0", [7]), "0.4.0");
+        var blocked = harness.Service.Install(Request(game, first), CancellationToken.None);
+        Assert.Equal("extra-proxy", blocked.ErrorCode);
+        Assert.Equal("OTHER"u8.ToArray(), File.ReadAllBytes(Path.Combine(gameDir, "winmm.dll")));
+
+        var approved = Request(game, first);
+        approved = new InstallRequest
+        {
+            Game = approved.Game,
+            Package = approved.Package,
+            System = approved.System,
+            OverwriteConflicts = true,
+            ApprovedRemovals = ["winmm.dll"]
+        };
+        var installed = harness.Service.Install(approved, CancellationToken.None);
+        Assert.True(installed.Success, installed.Message);
+        Assert.False(File.Exists(Path.Combine(gameDir, "winmm.dll")));
+        var marker = Path.Combine(gameDir, "dlssg_sm86", "manager-ownership.json");
+        var markerText = File.ReadAllText(marker);
+        Assert.DoesNotContain("manager-ownership.json", markerText, StringComparison.OrdinalIgnoreCase);
+        var markerRecord = game.Installation!.Files.Single(file => file.RelativePath.EndsWith("manager-ownership.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Hashing.Sha256File(marker), markerRecord.Sha256);
+        var original = game.Installation.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Hashing.Sha256Text("ORIG"), original.OriginalSha256);
+
+        var second = PackageFor(CreatePackage("0.4.1", [8]), "0.4.1");
+        var update = Request(game, second);
+        update.IsUpdate = true;
+        Assert.True(harness.Service.Install(update, CancellationToken.None).Success);
+        var third = PackageFor(CreatePackage("0.4.2", [9]), "0.4.2");
+        var again = Request(game, third);
+        again.IsUpdate = true;
+        Assert.True(harness.Service.Install(again, CancellationToken.None).Success);
+        Assert.Equal(new byte[] { 9 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        var afterUpdates = game.Installation!.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(original.BackupPath, afterUpdates.BackupPath);
+        Assert.Equal(original.OriginalSha256, afterUpdates.OriginalSha256);
+
+        File.Delete(afterUpdates.BackupPath!);
+        var fourth = PackageFor(CreatePackage("0.4.3", [10]), "0.4.3");
+        var refused = Request(game, fourth);
+        refused.IsUpdate = true;
+        var stopped = harness.Service.Install(refused, CancellationToken.None);
+        Assert.Equal("backup", stopped.ErrorCode);
+        Assert.Equal(new byte[] { 9 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+
+        afterUpdates.BackupPath = original.BackupPath;
+        File.WriteAllBytes(original.BackupPath!, "ORIG"u8.ToArray());
+        var removed = harness.Service.Uninstall(game, false, CancellationToken.None);
+        Assert.True(removed.Success, removed.Message);
+        Assert.Equal("ORIG"u8.ToArray(), File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal("OTHER"u8.ToArray(), File.ReadAllBytes(Path.Combine(gameDir, "winmm.dll")));
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Replaces_a_corrupt_library_database()
+    {
+        var root = Path.Combine(_root, "corrupt-db");
+        Directory.CreateDirectory(root);
+        var paths = new AppDataPaths(root);
+        paths.Ensure();
+        File.WriteAllText(paths.Database, "this is not sqlite");
+        var store = new LibraryStore(paths);
+        Assert.Empty(store.LoadGames());
+        Assert.NotEmpty(Directory.EnumerateFiles(root, "library.db.corrupt-*"));
     }
 
     [Fact]

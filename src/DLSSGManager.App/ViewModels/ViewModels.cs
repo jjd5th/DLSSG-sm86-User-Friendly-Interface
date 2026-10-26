@@ -110,6 +110,7 @@ public partial class DashboardViewModel : ObservableObject
     public string Hags => Session.SystemReport?.HagsEnabled switch { true => "On", false => "Off", _ => "Unknown" };
     public string InstalledRelease => Session.Games.Select(game => game.Record.Installation?.ReleaseTag).FirstOrDefault(tag => !string.IsNullOrWhiteSpace(tag)) ?? "None";
     public string LatestRelease => Session.Releases?.Selected?.Tag ?? "Not checked";
+    public string ManagerNotice => string.IsNullOrWhiteSpace(Session.Releases?.ManagerMessage) ? "" : Session.Releases.ManagerMessage;
     public string Reasons => Session.SystemReport == null ? "" : string.Join(Environment.NewLine, Session.SystemReport.Reasons);
     public bool HagsOff => Session.SystemReport?.HagsEnabled == false;
     public string ScanLabel => Session.IsBusy && Session.Work != null ? "Cancel scan" : "Scan games";
@@ -313,6 +314,7 @@ public partial class UpdatesViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(Idle))] private Task UpdateCompatibleAsync() => _coordinator.UpdateSelectedAsync(Pending.Where(game => game.Record.Compatibility?.Status is GameCompatibilityStatus.Confirmed or GameCompatibilityStatus.Likely));
     [RelayCommand] private void OpenNotes() => _coordinator.OpenReleasePage(Session.Releases?.Selected?.HtmlUrl);
     [RelayCommand] private void OpenManager() => _coordinator.OpenReleasePage(Session.Releases?.ManagerLatest?.HtmlUrl);
+    [RelayCommand(CanExecute = nameof(Idle))] private Task DownloadManagerAsync() => _coordinator.DownloadManagerUpdateAsync();
     private bool Idle() => !Session.IsBusy;
 }
 

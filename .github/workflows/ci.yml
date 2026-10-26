@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore DLSSGManager.sln
+
+      - name: Build
+        run: dotnet build DLSSGManager.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test DLSSGManager.sln -c Release --no-build --verbosity minimal
+
+      - name: Publish self-contained executable
+        run: dotnet publish src/DLSSGManager.App/DLSSGManager.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugSymbols=false -p:DebugType=none -o ${{ runner.temp }}/dlssg-publish
+
+      - name: Check the published executable
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "dlssg-publish"
+          Get-ChildItem $dir -Filter *.pdb -Recurse | Remove-Item -Force
+          $exe = Join-Path $dir "DLSSGManager.exe"
+          if (-not (Test-Path $exe)) { throw "DLSSGManager.exe was not published." }
+          if ((Get-Item $exe).Length -lt 20MB) { throw "DLSSGManager.exe is too small to contain the runtime." }
+          if (Get-ChildItem $dir -Filter *.pdb -Recurse) { throw "The publish folder should not include a PDB." }

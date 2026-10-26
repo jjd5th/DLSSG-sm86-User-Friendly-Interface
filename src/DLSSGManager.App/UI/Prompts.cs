@@ -40,6 +40,7 @@ public sealed class InstallChoice
     public required string Proxy { get; init; }
     public bool OverwriteConflicts { get; init; }
     public bool RemoveExtraProxies { get; init; }
+    public IReadOnlyList<string> ApprovedRemovals { get; init; } = [];
 }
 
 public sealed class ConfigEditRequest

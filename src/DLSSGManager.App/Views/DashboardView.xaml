@@ -39,6 +39,7 @@
                         <TextBlock Text="Mod release" Style="{StaticResource Muted}"/>
                         <TextBlock Text="{Binding InstalledRelease, StringFormat=In use {0}}"/>
                         <TextBlock Text="{Binding LatestRelease, StringFormat=Latest {0}}" Margin="0,4,0,0"/>
+                        <TextBlock Text="{Binding ManagerNotice}" Style="{StaticResource Muted}" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource Card}">

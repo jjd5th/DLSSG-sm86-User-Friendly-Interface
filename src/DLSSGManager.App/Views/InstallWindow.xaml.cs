@@ -20,7 +20,19 @@ public partial class InstallWindow : Window
         if (ProxyBox.SelectedItem == null && ProxyBox.Items.Count > 0)
             ProxyBox.SelectedIndex = 0;
         OverwriteBox.Visibility = preview.Conflicts.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        RemoveBox.Visibility = preview.ExtraProxies.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var showExtras = preview.ExtraProxies.Count > 0;
+        ExtraHeading.Visibility = showExtras ? Visibility.Visible : Visibility.Collapsed;
+        ExtraHelp.Visibility = showExtras ? Visibility.Visible : Visibility.Collapsed;
+        ExtraPanel.Visibility = showExtras ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var proxy in preview.ExtraProxies)
+        {
+            ExtraPanel.Children.Add(new System.Windows.Controls.CheckBox
+            {
+                Content = proxy + " — back this file up, then remove it",
+                Tag = proxy,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+        }
         AckBox.Visibility = preview.NeedsAcknowledgement ? Visibility.Visible : Visibility.Collapsed;
         var lines = preview.Warnings.ToList();
         if (preview.Conflicts.Count > 0)
@@ -44,11 +56,18 @@ public partial class InstallWindow : Window
             MessageBox.Show(this, "Approve the backup and replace step, or cancel.", "DLSSG Manager");
             return;
         }
+        var boxes = ExtraPanel.Children.OfType<System.Windows.Controls.CheckBox>().ToList();
+        if (boxes.Count > 0 && boxes.Any(box => box.IsChecked != true))
+        {
+            MessageBox.Show(this, "Approve a backup and removal for every other proxy DLL, or cancel. Unapproved files will not be deleted.", "DLSSG Manager");
+            return;
+        }
         Choice = new InstallChoice
         {
             Proxy = ProxyBox.SelectedItem?.ToString() ?? _preview.DefaultProxy,
             OverwriteConflicts = OverwriteBox.IsChecked == true,
-            RemoveExtraProxies = RemoveBox.IsChecked == true
+            RemoveExtraProxies = boxes.Count > 0,
+            ApprovedRemovals = boxes.Select(box => box.Tag?.ToString() ?? "").Where(name => name.Length > 0).ToList()
         };
         DialogResult = true;
     }

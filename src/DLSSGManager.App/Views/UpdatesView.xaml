@@ -11,6 +11,7 @@
                 <Button Content="Update all compatible" Style="{StaticResource SecondaryButton}" Command="{Binding UpdateCompatibleCommand}"/>
                 <Button Content="Release page" Style="{StaticResource SecondaryButton}" Command="{Binding OpenNotesCommand}"/>
                 <Button Content="Manager release" Style="{StaticResource SecondaryButton}" Command="{Binding OpenManagerCommand}"/>
+                <Button Content="Download manager update" Style="{StaticResource SecondaryButton}" Command="{Binding DownloadManagerCommand}"/>
             </WrapPanel>
             <TextBlock Text="{Binding Published, StringFormat=Published {0}}" Style="{StaticResource Muted}"/>
             <TextBlock Text="{Binding Manager}" Margin="0,4,0,8" TextWrapping="Wrap"/>

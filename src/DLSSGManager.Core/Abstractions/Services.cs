@@ -73,6 +73,7 @@ public interface IReleaseService
 {
     Task<ReleaseCheckResult> CheckAsync(bool includePrerelease, string? pinnedTag, CancellationToken cancellationToken);
     Task<PreparedPackage> PrepareAsync(ModRelease release, IProgress<double>? progress, CancellationToken cancellationToken);
+    Task<string> DownloadManagerPackageAsync(ModRelease release, string directory, IProgress<double>? progress, CancellationToken cancellationToken);
 }
 
 public interface IInstallationService

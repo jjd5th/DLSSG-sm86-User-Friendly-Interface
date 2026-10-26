@@ -17,6 +17,22 @@ public sealed class LibraryStore : ILibraryStore
         paths.Ensure();
         _database = paths.Database;
         _settingsPath = paths.SettingsFile;
+        try
+        {
+            using var probe = Open();
+            using var check = probe.CreateCommand();
+            check.CommandText = "PRAGMA quick_check";
+            var result = check.ExecuteScalar()?.ToString();
+            if (!string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(result ?? "The library database failed its integrity check.");
+        }
+        catch (Exception ex) when (ex is not InvalidDataException || File.Exists(_database))
+        {
+            if (ex is InvalidDataException || ex is SqliteException)
+                QuarantineDatabase();
+            else
+                throw;
+        }
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -178,6 +194,16 @@ public sealed class LibraryStore : ILibraryStore
         command.Parameters.AddWithValue("$id", record.GameId);
         command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(record, _json));
         command.ExecuteNonQuery();
+    }
+
+    private void QuarantineDatabase()
+    {
+        SqliteConnection.ClearAllPools();
+        if (!File.Exists(_database))
+            return;
+        var damaged = _database + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        File.Copy(_database, damaged, overwrite: true);
+        File.Delete(_database);
     }
 
     private SqliteConnection Open()

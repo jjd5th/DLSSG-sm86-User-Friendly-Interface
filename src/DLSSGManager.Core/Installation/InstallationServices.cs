@@ -126,16 +126,19 @@ public sealed class InstallationService : IInstallationService
 
         var proxy = request.ProxyFileName ?? request.Package.Manifest.DefaultProxy;
         var existing = game.Installation ?? _store.LoadInstallation(game.Id);
+        var unownedExtras = ProxyNames.Order.Where(name =>
+            !name.Equals(proxy, StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(Path.Combine(directory, name)) &&
+            !OwnedProxyMatches(directory, existing, name)).ToList();
+        var approved = new HashSet<string>(request.ApprovedRemovals ?? [], StringComparer.OrdinalIgnoreCase);
+        var unapproved = unownedExtras.Where(name => !approved.Contains(name)).ToList();
+        if (unapproved.Count > 0)
+            return OperationResult.Fail("These proxy DLLs were not installed by DLSSG Manager. Approve each file before installation can continue: " + string.Join(", ", unapproved) + ". Nothing was changed.", "extra-proxy");
         var deletes = OwnedProxiesToRemove(directory, existing, proxy);
-        if (request.RemoveUnownedProxies)
+        foreach (var name in approved)
         {
-            foreach (var name in ProxyNames.Order)
-            {
-                if (name.Equals(proxy, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (File.Exists(Path.Combine(directory, name)))
-                    deletes.Add(name);
-            }
+            if (!name.Equals(proxy, StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(directory, name)))
+                deletes.Add(name);
         }
         string? configText = request.ConfigurationText;
         var warnings = new List<string>();
@@ -174,6 +177,13 @@ public sealed class InstallationService : IInstallationService
             log.Add("Free space could not be checked: " + ex.Message);
         }
 
+        foreach (var step in plan)
+        {
+            var prior = FindPrior(existing, step.DestinationRelativePath);
+            if (prior is { OriginalExisted: true } && !PristineBackupOk(prior))
+                return OperationResult.Fail("The original backup for " + step.DestinationRelativePath + " is missing or no longer matches. Nothing was changed.", "backup");
+        }
+
         if (request.IsUpdate && existing != null)
             SnapshotRollback(directory, existing);
 
@@ -192,22 +202,53 @@ public sealed class InstallationService : IInstallationService
                 {
                     if (!File.Exists(destination))
                         continue;
+                    var currentHash = Hashing.Sha256File(destination);
                     var removedBackup = _backups.BackupFile(destination, backupRoot);
+                    if (!Hashing.Sha256File(removedBackup).Equals(currentHash, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The backup of " + step.DestinationRelativePath + " could not be verified.");
                     journal.Operations.Add(new JournalOperation { Kind = "delete", Path = destination, BackupPath = removedBackup, Existed = true });
                     WriteJournal(journal);
-                    File.Delete(destination);
-                    log.Add("Removed " + step.DestinationRelativePath);
+                    var priorDelete = FindPrior(existing, step.DestinationRelativePath);
+                    if (priorDelete is { OriginalExisted: true })
+                    {
+                        if (!PristineBackupOk(priorDelete))
+                            throw new InvalidOperationException("The original backup for " + step.DestinationRelativePath + " cannot be restored.");
+                        ReplaceFromBackup(priorDelete.BackupPath!, destination, priorDelete.OriginalSha256!);
+                        log.Add("Restored the original " + step.DestinationRelativePath);
+                    }
+                    else if (priorDelete != null)
+                    {
+                        File.Delete(destination);
+                        log.Add("Removed " + step.DestinationRelativePath);
+                    }
+                    else
+                    {
+                        File.Delete(destination);
+                        owned.Add(new OwnedFileRecord
+                        {
+                            RelativePath = Normalize(step.DestinationRelativePath),
+                            Sha256 = currentHash,
+                            Size = 0,
+                            OriginalExisted = true,
+                            OriginalSha256 = currentHash,
+                            BackupPath = removedBackup,
+                            IntentionallyAbsent = true
+                        });
+                        log.Add("Backed up and removed " + step.DestinationRelativePath);
+                    }
                     continue;
                 }
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 var existed = File.Exists(destination);
-                string? backup = null;
-                string? originalHash = null;
+                string? transactionBackup = null;
+                string? currentHashBefore = null;
                 if (existed)
                 {
-                    originalHash = Hashing.Sha256File(destination);
-                    backup = _backups.BackupFile(destination, backupRoot);
-                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = destination, BackupPath = backup, Existed = true });
+                    currentHashBefore = Hashing.Sha256File(destination);
+                    transactionBackup = _backups.BackupFile(destination, backupRoot);
+                    if (!Hashing.Sha256File(transactionBackup).Equals(currentHashBefore, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The backup of " + step.DestinationRelativePath + " could not be verified.");
+                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = destination, BackupPath = transactionBackup, Existed = true });
                 }
                 else
                 {
@@ -223,17 +264,29 @@ public sealed class InstallationService : IInstallationService
                 var hash = Hashing.Sha256File(destination);
                 if (step.SourcePath != null && !hash.Equals(Hashing.Sha256File(step.SourcePath), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException(step.DestinationRelativePath + " failed verification.");
+                var prior = FindPrior(existing, step.DestinationRelativePath);
+                var keepOriginal = prior is { OriginalExisted: true };
                 owned.Add(new OwnedFileRecord
                 {
-                    RelativePath = step.DestinationRelativePath.Replace('/', '\\'),
+                    RelativePath = Normalize(step.DestinationRelativePath),
                     Sha256 = hash,
                     Size = new FileInfo(destination).Length,
-                    OriginalExisted = existed,
-                    OriginalSha256 = originalHash,
-                    BackupPath = backup,
+                    OriginalExisted = keepOriginal || (prior == null && existed),
+                    OriginalSha256 = keepOriginal ? prior!.OriginalSha256 : prior == null && existed ? currentHashBefore : null,
+                    BackupPath = keepOriginal ? prior!.BackupPath : prior == null && existed ? transactionBackup : null,
                     IsConfiguration = step.IsConfiguration
                 });
                 log.Add("Installed " + step.DestinationRelativePath);
+            }
+
+            if (existing != null)
+            {
+                foreach (var prior in existing.Files.Where(file => file.IntentionallyAbsent))
+                {
+                    if (owned.Any(file => Normalize(file.RelativePath).Equals(Normalize(prior.RelativePath), StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    owned.Add(prior);
+                }
             }
 
             var markerRel = string.IsNullOrWhiteSpace(request.Package.Manifest.PayloadDirectory)
@@ -251,22 +304,9 @@ public sealed class InstallationService : IInstallationService
                 VerifiedUtc = DateTimeOffset.UtcNow,
                 PreviousReleaseTag = existing?.ReleaseTag,
                 RollbackDirectory = existing == null ? null : Path.Combine(BackupRoot(), game.Id, "rollback", existing.ReleaseTag),
-                Files = owned
+                Files = owned.Where(file => !IsMarker(file.RelativePath)).ToList()
             };
-            var markerPath = PathSafety.CombineUnderRoot(directory, markerRel);
-            Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
-            File.WriteAllText(markerPath, JsonSerializer.Serialize(record, Json()));
-            var markerHash = Hashing.Sha256File(markerPath);
-            owned.Add(new OwnedFileRecord
-            {
-                RelativePath = markerRel,
-                Sha256 = markerHash,
-                Size = new FileInfo(markerPath).Length,
-                IsConfiguration = true
-            });
-            record.Files = owned;
-            File.WriteAllText(markerPath, JsonSerializer.Serialize(record, Json()));
-            owned[^1].Sha256 = Hashing.Sha256File(markerPath);
+            PublishMarker(record, directory, markerRel, journal);
             _store.SaveInstallation(record);
             game.Installation = record;
             journal.State = "complete";
@@ -295,10 +335,12 @@ public sealed class InstallationService : IInstallationService
         if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
             return OperationResult.Fail("The game is running. Close it first.", "running");
         var problems = new List<string>();
-        foreach (var file in record.Files)
+        foreach (var file in record.Files.Where(item => !IsMarker(item.RelativePath)))
         {
             var path = Path.Combine(record.InstallDirectory, file.RelativePath);
-            if (!File.Exists(path))
+            if (file.OriginalExisted && !PristineBackupOk(file))
+                problems.Add("The original backup for " + file.RelativePath + " is missing or does not match.");
+            if (file.IntentionallyAbsent || !File.Exists(path))
                 continue;
             var hash = Hashing.Sha256File(path);
             var configWeCreated = file.IsConfiguration && !file.OriginalExisted;
@@ -313,23 +355,54 @@ public sealed class InstallationService : IInstallationService
             return OperationResult.Fail("Ownership could not be confirmed, so no files were changed. " + record.LastError, "ownership");
         }
 
-        foreach (var file in record.Files.OrderByDescending(item => item.RelativePath.Length))
+        var journal = new InstallJournal { GameId = game.Id };
+        WriteJournal(journal);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
-            if (!File.Exists(path))
-                continue;
-            if (file.OriginalExisted && !string.IsNullOrWhiteSpace(file.BackupPath) && File.Exists(file.BackupPath))
+            foreach (var file in record.Files.Where(item => !IsMarker(item.RelativePath)).OrderByDescending(item => item.RelativePath.Length))
             {
-                if (file.OriginalSha256 != null && !Hashing.Sha256File(file.BackupPath).Equals(file.OriginalSha256, StringComparison.OrdinalIgnoreCase))
-                    return OperationResult.Fail("A backup no longer matches the original it was taken from: " + file.RelativePath, "backup");
-                _backups.RestoreFile(file.BackupPath, path);
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+                if (file.IntentionallyAbsent)
+                {
+                    if (!File.Exists(path))
+                        ReplaceFromBackup(file.BackupPath!, path, file.OriginalSha256!);
+                    continue;
+                }
+                if (!File.Exists(path))
+                    continue;
+                if (file.OriginalExisted)
+                {
+                    var currentBackup = _backups.BackupFile(path, Path.Combine(BackupRoot(), game.Id, "uninstall-" + journal.Id));
+                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = path, BackupPath = currentBackup, Existed = true });
+                    WriteJournal(journal);
+                    ReplaceFromBackup(file.BackupPath!, path, file.OriginalSha256!);
+                }
+                else
+                {
+                    var removed = _backups.BackupFile(path, Path.Combine(BackupRoot(), game.Id, "uninstall-" + journal.Id));
+                    journal.Operations.Add(new JournalOperation { Kind = "delete", Path = path, BackupPath = removed, Existed = true });
+                    WriteJournal(journal);
+                    File.Delete(path);
+                }
             }
-            else
+            foreach (var relative in new[] { Path.Combine("dlssg_sm86", "manager-ownership.json"), "manager-ownership.json" })
             {
-                File.Delete(path);
+                var marker = Path.Combine(record.InstallDirectory, relative);
+                if (!File.Exists(marker))
+                    continue;
+                var removed = _backups.BackupFile(marker, Path.Combine(BackupRoot(), game.Id, "uninstall-" + journal.Id));
+                journal.Operations.Add(new JournalOperation { Kind = "delete", Path = marker, BackupPath = removed, Existed = true });
+                WriteJournal(journal);
+                File.Delete(marker);
             }
         }
+        catch (Exception ex)
+        {
+            RollbackJournal(journal);
+            return OperationResult.Fail("Uninstall stopped and the previous files were restored. " + ex.Message, "rolled-back");
+        }
+        File.Delete(JournalPath(journal.Id));
         var payload = Path.Combine(record.InstallDirectory, "dlssg_sm86");
         if (Directory.Exists(payload) && !Directory.EnumerateFiles(payload, "*", SearchOption.AllDirectories).Any())
             Directory.Delete(payload, true);
@@ -462,7 +535,7 @@ public sealed class InstallationService : IInstallationService
         var missing = false;
         var changed = false;
         var configChanged = false;
-        foreach (var file in known.Files.Where(item => !item.RelativePath.EndsWith("manager-ownership.json", StringComparison.OrdinalIgnoreCase)))
+        foreach (var file in known.Files.Where(item => !IsMarker(item.RelativePath) && !item.IntentionallyAbsent))
         {
             var path = Path.Combine(known.InstallDirectory, file.RelativePath);
             if (!File.Exists(path))
@@ -516,10 +589,10 @@ public sealed class InstallationService : IInstallationService
             {
                 continue;
             }
-            if (journal == null || journal.State == "complete")
+            if (journal == null || journal.State is "complete" or "recovered")
                 continue;
-            RollbackJournal(journal);
-            journal.State = "recovered";
+            var restored = RollbackJournal(journal);
+            journal.State = restored ? "recovered" : "recovery-incomplete";
             File.WriteAllText(file, JsonSerializer.Serialize(journal, Json()));
             count++;
         }
@@ -580,8 +653,9 @@ public sealed class InstallationService : IInstallationService
         return null;
     }
 
-    private void RollbackJournal(InstallJournal journal)
+    private bool RollbackJournal(InstallJournal journal)
     {
+        var restored = true;
         foreach (var operation in journal.Operations.AsEnumerable().Reverse())
         {
             try
@@ -590,19 +664,94 @@ public sealed class InstallationService : IInstallationService
                     File.Delete(operation.Path);
                 else if (!string.IsNullOrWhiteSpace(operation.BackupPath) && File.Exists(operation.BackupPath))
                     File.Copy(operation.BackupPath, operation.Path, overwrite: true);
+                else if (operation.Existed)
+                    restored = false;
             }
             catch (Exception ex)
             {
+                restored = false;
                 AppLog.Error("Rollback step failed for " + operation.Path, ex);
             }
         }
+        return restored;
     }
 
     private void WriteJournal(InstallJournal journal)
     {
         Directory.CreateDirectory(_paths.Journals);
-        File.WriteAllText(JournalPath(journal.Id), JsonSerializer.Serialize(journal, Json()));
+        var target = JournalPath(journal.Id);
+        var temporary = target + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(journal, Json()));
+        File.Move(temporary, target, overwrite: true);
     }
+
+    private void PublishMarker(InstallationRecord record, string directory, string markerRel, InstallJournal journal)
+    {
+        record.Files = record.Files.Where(file => !IsMarker(file.RelativePath)).ToList();
+        var path = PathSafety.CombineUnderRoot(directory, markerRel);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        journal.Operations.Add(new JournalOperation { Kind = "create", Path = path, Existed = File.Exists(path) });
+        if (File.Exists(path))
+        {
+            var markerBackup = _backups.BackupFile(path, Path.Combine(BackupRoot(), record.GameId, "marker-" + journal.Id));
+            journal.Operations[^1] = new JournalOperation { Kind = "replace", Path = path, BackupPath = markerBackup, Existed = true };
+        }
+        WriteJournal(journal);
+        File.WriteAllText(path, JsonSerializer.Serialize(record, Json()));
+        if (File.ReadAllText(path).Contains("manager-ownership.json", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Ownership metadata included its own filename. The marker was not updated.");
+        record.Files.Add(new OwnedFileRecord
+        {
+            RelativePath = Normalize(markerRel),
+            Sha256 = Hashing.Sha256File(path),
+            Size = new FileInfo(path).Length,
+            IsConfiguration = true
+        });
+    }
+
+    private static void ReplaceFromBackup(string backupPath, string destination, string expectedHash)
+    {
+        if (!File.Exists(backupPath) || !Hashing.Sha256File(backupPath).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("A backup could not be verified: " + destination);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary = destination + ".dlssg-restore";
+        File.Copy(backupPath, temporary, overwrite: true);
+        if (!Hashing.Sha256File(temporary).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            File.Delete(temporary);
+            throw new InvalidOperationException("The restored copy did not match the backup: " + destination);
+        }
+        File.Move(temporary, destination, overwrite: true);
+    }
+
+    private static OwnedFileRecord? FindPrior(InstallationRecord? existing, string relative)
+    {
+        if (existing == null)
+            return null;
+        var key = Normalize(relative);
+        return existing.Files.FirstOrDefault(file => Normalize(file.RelativePath).Equals(key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool PristineBackupOk(OwnedFileRecord file) =>
+        file.OriginalExisted &&
+        !string.IsNullOrWhiteSpace(file.BackupPath) &&
+        !string.IsNullOrWhiteSpace(file.OriginalSha256) &&
+        File.Exists(file.BackupPath) &&
+        Hashing.Sha256File(file.BackupPath).Equals(file.OriginalSha256, StringComparison.OrdinalIgnoreCase);
+
+    private static bool OwnedProxyMatches(string directory, InstallationRecord? existing, string name)
+    {
+        var prior = FindPrior(existing, name);
+        if (prior == null || prior.IntentionallyAbsent)
+            return false;
+        var path = Path.Combine(directory, name);
+        return File.Exists(path) && Hashing.Sha256File(path).Equals(prior.Sha256, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMarker(string relative) =>
+        Normalize(relative).EndsWith("manager-ownership.json", StringComparison.OrdinalIgnoreCase);
+
+    private static string Normalize(string relative) => relative.Replace('/', '\\');
 
     private string JournalPath(string id) => Path.Combine(_paths.Journals, id + ".json");
 
