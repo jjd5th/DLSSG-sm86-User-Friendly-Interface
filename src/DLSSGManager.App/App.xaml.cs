@@ -23,6 +23,11 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Any(arg => arg.Equals("--self-test", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(StartupSelfTest.Run(e.Args));
+            return;
+        }
         var paths = new AppDataPaths();
         paths.Ensure();
         AppLog.DirectoryPath = paths.Logs;

@@ -82,6 +82,9 @@ public sealed class InstallationService : IInstallationService
     private readonly AppDataPaths _paths;
     private readonly Func<AppSettings> _settings;
     private readonly IConfigurationService _configuration;
+    internal int FailAfterAppliedSteps { get; set; }
+    internal bool FailSnapshotBeforePromote { get; set; }
+    public int UnresolvedRecoveries { get; private set; }
 
     public InstallationService(IBackupService backups, IProcessInspector processes, ILibraryStore store, AppDataPaths paths, Func<AppSettings> settings, IConfigurationService configuration)
     {
@@ -185,7 +188,16 @@ public sealed class InstallationService : IInstallationService
         }
 
         if (request.IsUpdate && existing != null)
-            SnapshotRollback(directory, existing);
+        {
+            try
+            {
+                SnapshotRollback(directory, existing);
+            }
+            catch (Exception ex)
+            {
+                return OperationResult.Fail("The previous version could not be snapshotted, so no game files were changed. " + ex.Message, "snapshot");
+            }
+        }
 
         var journal = new InstallJournal { GameId = game.Id };
         WriteJournal(journal);
@@ -421,55 +433,111 @@ public sealed class InstallationService : IInstallationService
             return OperationResult.Fail("There is no recorded installation to repair.", "ownership");
         if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
             return OperationResult.Fail("The game is running. Close it first.", "running");
-        var repaired = new List<string>();
-        foreach (var file in package.Manifest.Files.Where(item => item.Role is "payload" or "proxy" or "alternative"))
+        if (!_paths.TryWritable(record.InstallDirectory, out var writeError))
+            return OperationResult.Fail("The game folder is not writable. " + writeError, "access");
+
+        var steps = new List<(string Relative, string Source, string Destination, string Hash, OwnedFileRecord? Owned)>();
+        foreach (var file in package.Manifest.Files.Where(item => item.Role is "payload" or "proxy"))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (file.Role == "proxy" && !file.DestinationRelativePath.Equals(record.ProxyFileName, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (file.Role == "alternative")
+            var relative = Normalize(file.DestinationRelativePath);
+            if (relative.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
                 continue;
-            var destination = Path.Combine(record.InstallDirectory, file.DestinationRelativePath);
             var source = Path.Combine(package.Manifest.PackageRoot, file.PackageRelativePath);
-            if (!File.Exists(source))
+            var destination = Path.Combine(record.InstallDirectory, relative);
+            var owned = record.Files.FirstOrDefault(item => Normalize(item.RelativePath).Equals(relative, StringComparison.OrdinalIgnoreCase));
+            if (owned?.IsConfiguration == true)
                 continue;
+            if (!File.Exists(source))
+            {
+                if (owned == null)
+                    continue;
+                if (!File.Exists(destination) || !Hashing.Sha256File(destination).Equals(owned.Sha256, StringComparison.OrdinalIgnoreCase))
+                    return OperationResult.Fail("The repair source for " + relative + " is missing, so nothing was changed.", "source");
+                continue;
+            }
             var sourceHash = Hashing.Sha256File(source);
             if (File.Exists(destination))
             {
                 var current = Hashing.Sha256File(destination);
                 if (current.Equals(sourceHash, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var owned = record.Files.FirstOrDefault(item => item.RelativePath.Equals(file.DestinationRelativePath, StringComparison.OrdinalIgnoreCase));
-                if (owned == null || !owned.Sha256.Equals(current, StringComparison.OrdinalIgnoreCase))
-                    return OperationResult.Fail(file.DestinationRelativePath + " was changed by something else. Repair will not overwrite it.", "ownership");
+                if (owned == null)
+                    return OperationResult.Fail(relative + " is not part of the recorded installation. Nothing was changed.", "ownership");
+                var stillOurs = current.Equals(owned.Sha256, StringComparison.OrdinalIgnoreCase);
+                if (!stillOurs && owned.OriginalExisted)
+                    return OperationResult.Fail(relative + " was changed by something else. Repair will not overwrite it, and nothing was changed.", "ownership");
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, overwrite: true);
-            var updated = record.Files.FirstOrDefault(item => item.RelativePath.Equals(file.DestinationRelativePath, StringComparison.OrdinalIgnoreCase));
-            if (updated == null)
+            else if (owned == null)
             {
-                record.Files.Add(new OwnedFileRecord
-                {
-                    RelativePath = file.DestinationRelativePath,
-                    Sha256 = sourceHash,
-                    Size = new FileInfo(destination).Length
-                });
+                continue;
             }
-            else
-            {
-                updated.Sha256 = sourceHash;
-                updated.Size = new FileInfo(destination).Length;
-            }
-            repaired.Add(file.DestinationRelativePath);
+            steps.Add((relative, source, destination, sourceHash, owned));
         }
-        record.State = ModInstallState.InstalledVerified;
-        record.VerifiedUtc = DateTimeOffset.UtcNow;
-        record.LastError = null;
-        _store.SaveInstallation(record);
-        game.Installation = Inspect(game, record, package.Release.Tag);
-        return OperationResult.Ok(repaired.Count == 0
-            ? "The recorded files already match the release. The configuration file was left as it is."
-            : "Repaired " + string.Join(", ", repaired) + ". The configuration file was not reset.");
+        if (steps.Count == 0)
+            return OperationResult.Ok("The recorded files already match the release. The configuration file was left as it is.");
+        if (!HasFreeSpace(record.InstallDirectory, steps.Sum(step => new FileInfo(step.Source).Length)))
+            return OperationResult.Fail("There is not enough free disk space to repair and keep a backup.", "disk");
+
+        var journal = new InstallJournal { GameId = game.Id, State = "repair" };
+        WriteJournal(journal);
+        var applied = 0;
+        var repaired = new List<string>();
+        try
+        {
+            foreach (var step in steps)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (File.Exists(step.Destination))
+                {
+                    var backup = _backups.BackupFile(step.Destination, Path.Combine(BackupRoot(), game.Id, "repair-" + journal.Id));
+                    if (!Hashing.Sha256File(backup).Equals(Hashing.Sha256File(step.Destination), StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The backup of " + step.Relative + " could not be verified.");
+                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = step.Destination, BackupPath = backup, Existed = true });
+                }
+                else
+                {
+                    journal.Operations.Add(new JournalOperation { Kind = "create", Path = step.Destination, Existed = false });
+                }
+                WriteJournal(journal);
+                CopyVerified(step.Source, step.Destination, step.Hash);
+                repaired.Add(step.Relative);
+                applied++;
+                ThrowIfInjected(applied);
+            }
+            foreach (var step in steps)
+            {
+                if (step.Owned == null)
+                {
+                    record.Files.Add(new OwnedFileRecord
+                    {
+                        RelativePath = step.Relative,
+                        Sha256 = step.Hash,
+                        Size = new FileInfo(step.Destination).Length
+                    });
+                }
+                else
+                {
+                    step.Owned.Sha256 = step.Hash;
+                    step.Owned.Size = new FileInfo(step.Destination).Length;
+                }
+            }
+            record.VerifiedUtc = DateTimeOffset.UtcNow;
+            record.LastError = null;
+            var markerRel = record.Files.Select(file => file.RelativePath).FirstOrDefault(IsMarker) ?? Path.Combine("dlssg_sm86", "manager-ownership.json");
+            PublishMarker(record, record.InstallDirectory, markerRel, journal);
+            game.Installation = Inspect(game, record, package.Release.Tag);
+            _store.SaveInstallation(record);
+            File.Delete(JournalPath(journal.Id));
+            _store.AppendLog(game.Id, "repair", "success", string.Join(", ", repaired));
+            return OperationResult.Ok("Repaired " + string.Join(", ", repaired) + ". The configuration file was not reset.");
+        }
+        catch (Exception ex)
+        {
+            return FinishFailedTransaction(journal, record, "Repair failed. " + ex.Message);
+        }
     }
 
     public OperationResult Rollback(GameRecord game, CancellationToken cancellationToken)
@@ -479,36 +547,104 @@ public sealed class InstallationService : IInstallationService
             return OperationResult.Fail("There is no previous version snapshot to restore.", "rollback");
         if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
             return OperationResult.Fail("The game is running. Close it first.", "running");
+        if (!_paths.TryWritable(record.InstallDirectory, out var writeError))
+            return OperationResult.Fail("The game folder is not writable. " + writeError, "access");
         var snapshotFile = Path.Combine(record.RollbackDirectory, "snapshot.json");
         if (!File.Exists(snapshotFile))
-            return OperationResult.Fail("The rollback snapshot is incomplete.", "rollback");
-        var snapshot = JsonSerializer.Deserialize<InstallationRecord>(File.ReadAllText(snapshotFile), Json()) ?? throw new InvalidOperationException("Rollback snapshot could not be read.");
-        foreach (var file in record.Files)
+            return OperationResult.Fail("The rollback snapshot is incomplete. No files were changed.", "rollback");
+        InstallationRecord snapshot;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
-            if (!File.Exists(path))
-                continue;
-            if (!Hashing.Sha256File(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) && !file.IsConfiguration)
-                return OperationResult.Fail("A current file no longer matches the recorded install, so rollback stopped: " + file.RelativePath, "ownership");
-            if (!snapshot.Files.Any(item => item.RelativePath.Equals(file.RelativePath, StringComparison.OrdinalIgnoreCase)))
-                File.Delete(path);
+            snapshot = JsonSerializer.Deserialize<InstallationRecord>(File.ReadAllText(snapshotFile), Json()) ?? throw new InvalidOperationException("empty");
         }
-        foreach (var file in snapshot.Files)
+        catch (Exception ex)
+        {
+            return OperationResult.Fail("The rollback snapshot could not be read. No files were changed. " + ex.Message, "rollback");
+        }
+
+        var problems = new List<string>();
+        long bytes = 0;
+        foreach (var file in snapshot.Files.Where(item => !item.IntentionallyAbsent))
         {
             var source = Path.Combine(record.RollbackDirectory, "files", file.RelativePath);
             if (!File.Exists(source))
-                continue;
-            var destination = Path.Combine(record.InstallDirectory, file.RelativePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, overwrite: true);
+                problems.Add(file.RelativePath + " is missing from the snapshot.");
+            else if (!Hashing.Sha256File(source).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                problems.Add(file.RelativePath + " does not match the snapshot hash.");
+            else
+                bytes += new FileInfo(source).Length;
         }
-        snapshot.RollbackDirectory = null;
-        snapshot.PreviousReleaseTag = record.ReleaseTag;
-        _store.SaveInstallation(snapshot);
-        game.Installation = snapshot;
-        _store.AppendLog(game.Id, "rollback", "success", snapshot.ReleaseTag);
-        return OperationResult.Ok($"Rolled {game.Name} back to {snapshot.ReleaseTag}.");
+        foreach (var file in record.Files.Where(item => !item.IntentionallyAbsent && !IsMarker(item.RelativePath)))
+        {
+            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+            if (!File.Exists(path))
+                continue;
+            var hash = Hashing.Sha256File(path);
+            var configWeCreated = file.IsConfiguration && !file.OriginalExisted;
+            if (!hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) && !configWeCreated)
+                problems.Add(file.RelativePath + " was changed by something else.");
+        }
+        if (problems.Count > 0)
+            return OperationResult.Fail(string.Join(" ", problems) + " No files were changed.", "rollback");
+        if (!HasFreeSpace(record.InstallDirectory, bytes))
+            return OperationResult.Fail("There is not enough free disk space to roll back and keep a backup.", "disk");
+
+        var journal = new InstallJournal { GameId = game.Id, State = "rollback" };
+        WriteJournal(journal);
+        var applied = 0;
+        try
+        {
+            foreach (var file in record.Files.Where(item => !IsMarker(item.RelativePath)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (snapshot.Files.Any(item => Normalize(item.RelativePath).Equals(Normalize(file.RelativePath), StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+                if (!File.Exists(path))
+                    continue;
+                var current = Hashing.Sha256File(path);
+                if (!current.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) && !(file.IsConfiguration && !file.OriginalExisted))
+                    throw new InvalidOperationException(file.RelativePath + " changed after the rollback check.");
+                var backup = _backups.BackupFile(path, Path.Combine(BackupRoot(), game.Id, "rollback-tx-" + journal.Id));
+                journal.Operations.Add(new JournalOperation { Kind = "delete", Path = path, BackupPath = backup, Existed = true });
+                WriteJournal(journal);
+                File.Delete(path);
+                applied++;
+                ThrowIfInjected(applied);
+            }
+            foreach (var file in snapshot.Files.Where(item => !item.IntentionallyAbsent))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var source = Path.Combine(record.RollbackDirectory, "files", file.RelativePath);
+                var destination = Path.Combine(record.InstallDirectory, file.RelativePath);
+                if (File.Exists(destination))
+                {
+                    var backup = _backups.BackupFile(destination, Path.Combine(BackupRoot(), game.Id, "rollback-tx-" + journal.Id));
+                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = destination, BackupPath = backup, Existed = true });
+                }
+                else
+                {
+                    journal.Operations.Add(new JournalOperation { Kind = "create", Path = destination, Existed = false });
+                }
+                WriteJournal(journal);
+                CopyVerified(source, destination, file.Sha256);
+                applied++;
+                ThrowIfInjected(applied);
+            }
+            snapshot.PreviousReleaseTag = record.ReleaseTag;
+            snapshot.RollbackDirectory = null;
+            var markerRel = snapshot.Files.Select(file => file.RelativePath).FirstOrDefault(IsMarker) ?? Path.Combine("dlssg_sm86", "manager-ownership.json");
+            PublishMarker(snapshot, record.InstallDirectory, markerRel, journal);
+            _store.SaveInstallation(snapshot);
+            game.Installation = snapshot;
+            File.Delete(JournalPath(journal.Id));
+            _store.AppendLog(game.Id, "rollback", "success", snapshot.ReleaseTag);
+            return OperationResult.Ok($"Rolled {game.Name} back to {snapshot.ReleaseTag}. The original game-file backups were kept.");
+        }
+        catch (Exception ex)
+        {
+            return FinishFailedTransaction(journal, record, "Rollback failed. " + ex.Message);
+        }
     }
 
     public InstallationRecord Inspect(GameRecord game, InstallationRecord? known, string? latestTag)
@@ -578,6 +714,7 @@ public sealed class InstallationService : IInstallationService
         if (!Directory.Exists(_paths.Journals))
             return 0;
         var count = 0;
+        UnresolvedRecoveries = 0;
         foreach (var file in Directory.EnumerateFiles(_paths.Journals, "*.json"))
         {
             InstallJournal? journal;
@@ -589,32 +726,149 @@ public sealed class InstallationService : IInstallationService
             {
                 continue;
             }
-            if (journal == null || journal.State is "complete" or "recovered")
+            if (journal == null || journal.State is "complete" or "recovered" or "rolled-back")
                 continue;
             var restored = RollbackJournal(journal);
             journal.State = restored ? "recovered" : "recovery-incomplete";
             File.WriteAllText(file, JsonSerializer.Serialize(journal, Json()));
-            count++;
+            if (restored)
+                count++;
+            else
+                UnresolvedRecoveries++;
         }
         return count;
     }
 
     private void SnapshotRollback(string directory, InstallationRecord existing)
     {
-        var snapshotRoot = Path.Combine(BackupRoot(), existing.GameId, "rollback", existing.ReleaseTag);
-        if (Directory.Exists(snapshotRoot))
-            Directory.Delete(snapshotRoot, true);
-        Directory.CreateDirectory(Path.Combine(snapshotRoot, "files"));
-        foreach (var file in existing.Files)
+        var finalRoot = Path.Combine(BackupRoot(), existing.GameId, "rollback", existing.ReleaseTag);
+        var staging = finalRoot + ".staging-" + Guid.NewGuid().ToString("N");
+        Directory.CreateDirectory(Path.Combine(staging, "files"));
+        try
         {
-            var source = Path.Combine(directory, file.RelativePath);
-            if (!File.Exists(source))
-                continue;
-            var destination = Path.Combine(snapshotRoot, "files", file.RelativePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, true);
+            var snapshotRecord = JsonSerializer.Deserialize<InstallationRecord>(JsonSerializer.Serialize(existing, Json()), Json())
+                ?? throw new InvalidOperationException("The installation record could not be copied for the snapshot.");
+            foreach (var file in snapshotRecord.Files.Where(item => !item.IntentionallyAbsent))
+            {
+                var source = Path.Combine(directory, file.RelativePath);
+                if (!File.Exists(source))
+                {
+                    if (file.IsConfiguration)
+                        continue;
+                    throw new InvalidOperationException(file.RelativePath + " is missing, so the previous version was not snapshotted.");
+                }
+                var destination = Path.Combine(staging, "files", file.RelativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination, true);
+                var copied = Hashing.Sha256File(destination);
+                if (!copied.Equals(Hashing.Sha256File(source), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The snapshot copy of " + file.RelativePath + " did not match.");
+                if (file.IsConfiguration)
+                    file.Sha256 = copied;
+                else if (!copied.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The snapshot of " + file.RelativePath + " does not match the recorded installation.");
+            }
+            File.WriteAllText(Path.Combine(staging, "snapshot.json"), JsonSerializer.Serialize(snapshotRecord, Json()));
+            _ = JsonSerializer.Deserialize<InstallationRecord>(File.ReadAllText(Path.Combine(staging, "snapshot.json")), Json())
+                ?? throw new InvalidOperationException("The snapshot metadata could not be read back.");
+            if (FailSnapshotBeforePromote)
+                throw new InvalidOperationException("Snapshot promotion was stopped before the previous snapshot was replaced.");
+            string? displaced = null;
+            if (Directory.Exists(finalRoot))
+            {
+                displaced = finalRoot + ".previous-" + Guid.NewGuid().ToString("N");
+                Directory.Move(finalRoot, displaced);
+            }
+            try
+            {
+                Directory.Move(staging, finalRoot);
+            }
+            catch
+            {
+                if (displaced != null && Directory.Exists(displaced) && !Directory.Exists(finalRoot))
+                    Directory.Move(displaced, finalRoot);
+                throw;
+            }
+            if (displaced != null && Directory.Exists(displaced))
+            {
+                try
+                {
+                    Directory.Delete(displaced, true);
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("The previous snapshot was kept because it could not be removed.", ex);
+                }
+            }
         }
-        File.WriteAllText(Path.Combine(snapshotRoot, "snapshot.json"), JsonSerializer.Serialize(existing, Json()));
+        catch
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, true);
+            throw;
+        }
+    }
+
+    private OperationResult FinishFailedTransaction(InstallJournal journal, InstallationRecord record, string message)
+    {
+        var restored = RollbackJournal(journal);
+        if (!restored)
+        {
+            journal.State = "recovery-incomplete";
+            WriteJournal(journal);
+            record.State = ModInstallState.ManualIntervention;
+            record.LastError = message + " The automatic undo did not finish. The journal and backups were kept.";
+            _store.SaveInstallation(record);
+            return OperationResult.Fail(record.LastError, "manual");
+        }
+        journal.State = "rolled-back";
+        WriteJournal(journal);
+        return OperationResult.Fail(message + " The files were returned to their previous state. Recovery information was kept.", "rolled-back");
+    }
+
+    private void ThrowIfInjected(int applied)
+    {
+        if (FailAfterAppliedSteps > 0 && applied >= FailAfterAppliedSteps)
+            throw new InvalidOperationException("A failure was injected after " + applied + " file operation(s).");
+    }
+
+    private static void CopyVerified(string source, string destination, string expectedHash)
+    {
+        if (!File.Exists(source) || !Hashing.Sha256File(source).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The source no longer matches the expected hash: " + destination);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary = destination + ".dlssg-stage";
+        File.Copy(source, temporary, overwrite: true);
+        if (!Hashing.Sha256File(temporary).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            File.Delete(temporary);
+            throw new InvalidOperationException("The staged file did not match: " + destination);
+        }
+        try
+        {
+            File.Move(temporary, destination, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+            throw;
+        }
+        if (!Hashing.Sha256File(destination).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The written file did not match: " + destination);
+    }
+
+    private static bool HasFreeSpace(string directory, long bytes)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(directory));
+            return !string.IsNullOrWhiteSpace(root) && new DriveInfo(root).AvailableFreeSpace >= bytes + 100L * 1024 * 1024;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static HashSet<string> OwnedProxiesToRemove(string directory, InstallationRecord? existing, string keep)
@@ -681,7 +935,14 @@ public sealed class InstallationService : IInstallationService
         Directory.CreateDirectory(_paths.Journals);
         var target = JournalPath(journal.Id);
         var temporary = target + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(journal, Json()));
+        var json = JsonSerializer.Serialize(journal, Json());
+        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        using (var writer = new StreamWriter(stream))
+        {
+            writer.Write(json);
+            writer.Flush();
+            stream.Flush(true);
+        }
         File.Move(temporary, target, overwrite: true);
     }
 

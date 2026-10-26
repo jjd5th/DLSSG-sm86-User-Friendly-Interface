@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -39,3 +40,14 @@ jobs:
           if (-not (Test-Path $exe)) { throw "DLSSGManager.exe was not published." }
           if ((Get-Item $exe).Length -lt 20MB) { throw "DLSSGManager.exe is too small to contain the runtime." }
           if (Get-ChildItem $dir -Filter *.pdb -Recurse) { throw "The publish folder should not include a PDB." }
+          $data = Join-Path $env:RUNNER_TEMP "self-test-data"
+          $log = Join-Path $env:RUNNER_TEMP "self-test.log"
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test","--data",$data,"--log",$log -PassThru -NoNewWindow
+          if (-not $process.WaitForExit(90000)) {
+            $process.Kill()
+            throw "DLSSGManager.exe --self-test timed out."
+          }
+          if (Test-Path $log) { Get-Content $log }
+          if ($process.ExitCode -ne 0) { throw "DLSSGManager.exe --self-test exited $($process.ExitCode)." }
+          $summary = Get-Content $log -Raw
+          if ($summary -notmatch "result: pass") { throw "The self-test log did not report a pass." }

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using DLSSGManager.Core.Abstractions;
 
@@ -146,6 +147,25 @@ public sealed class AppDataPaths
         Directory.CreateDirectory(DefaultBackups);
         Directory.CreateDirectory(DefaultCache);
         Directory.CreateDirectory(Artwork);
+    }
+}
+
+public static class AppVersion
+{
+    public static string Current()
+    {
+        var assembly = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(item => item.GetName().Name == "DLSSGManager")
+            ?? Assembly.GetEntryAssembly()
+            ?? typeof(AppVersion).Assembly;
+        var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            var plus = informational.IndexOf('+');
+            return plus >= 0 ? informational[..plus] : informational;
+        }
+        var version = assembly.GetName().Version;
+        return version == null ? "0.0.0" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
     }
 }
 

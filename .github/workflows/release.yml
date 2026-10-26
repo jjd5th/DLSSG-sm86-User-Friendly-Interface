@@ -10,8 +10,18 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require the tag to match the application version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content "src/DLSSGManager.App/DLSSGManager.App.csproj"
+          $version = @($project.Project.PropertyGroup.Version) | Where-Object { $_ } | Select-Object -First 1
+          $version = "$version".Trim()
+          $tag = "${{ github.ref_name }}"
+          if ("v$version" -ne $tag) { throw "Tag $tag does not match application version $version in DLSSGManager.App.csproj." }
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -46,6 +56,38 @@ jobs:
           Set-Content -Path (Join-Path $env:RUNNER_TEMP "SHA256SUMS.txt") -Value "$hash  DLSSGManager-${{ github.ref_name }}-win-x64.zip"
           "zip=$zip" >> $env:GITHUB_OUTPUT
           "hash=$hash" >> $env:GITHUB_OUTPUT
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/").TrimEnd("/") } | Where-Object { $_ })
+          } finally { $archive.Dispose() }
+          $expected = @("DLSSGManager.exe", "README.md", "LICENSE")
+          $missing = $expected | Where-Object { $_ -notin $names }
+          $extra = $names | Where-Object { $_ -notin $expected }
+          if ($missing) { throw "The release ZIP is missing: $($missing -join ', ')" }
+          if ($extra) { throw "The release ZIP contains unexpected files: $($extra -join ', ')" }
+
+      - name: Self-test the extracted executable
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "DLSSGManager-${{ github.ref_name }}-win-x64.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "dlssg-extract"
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $exe = Join-Path $extract "DLSSGManager.exe"
+          $data = Join-Path $env:RUNNER_TEMP "release-self-test"
+          $log = Join-Path $env:RUNNER_TEMP "release-self-test.log"
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test","--data",$data,"--log",$log -PassThru -NoNewWindow
+          if (-not $process.WaitForExit(90000)) {
+            $process.Kill()
+            throw "The packaged executable self-test timed out."
+          }
+          if (Test-Path $log) { Get-Content $log }
+          if ($process.ExitCode -ne 0) { throw "The packaged executable self-test exited $($process.ExitCode)." }
+          $summary = Get-Content $log -Raw
+          if ($summary -notmatch "result: pass") { throw "The packaged executable self-test did not pass." }
+          [xml]$project = Get-Content "src/DLSSGManager.App/DLSSGManager.App.csproj"
+          $version = "$($project.Project.PropertyGroup.Version)".Trim()
+          if ($summary -notmatch [regex]::Escape("version: $version")) { throw "The packaged executable did not report version $version." }
 
       - name: Publish the GitHub Release
         uses: softprops/action-gh-release@v2

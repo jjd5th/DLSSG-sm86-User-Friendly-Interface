@@ -393,6 +393,242 @@ public class CoreTests : IDisposable
     }
 
     [Fact]
+    public void Rollback_rejects_bad_snapshots_and_restores_after_a_midway_failure()
+    {
+        var harness = CreateHarness();
+        var gameDir = Path.Combine(_root, "rollback");
+        Directory.CreateDirectory(gameDir);
+        var exe = Path.Combine(gameDir, "game.exe");
+        File.WriteAllBytes(exe, [1]);
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), "ORIG"u8.ToArray());
+        File.WriteAllText(Path.Combine(gameDir, "keep-me.txt"), "leave this file");
+        var game = TestGame(gameDir, exe);
+        var first = PackageFor(CreatePackage("0.4.0", [7]), "0.4.0");
+        Assert.True(harness.Service.Install(Request(game, first), CancellationToken.None).Success);
+        var original = game.Installation!.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase));
+        var ini = "[General]\r\nEnabled=1\r\nNote=before-update\r\n";
+        File.WriteAllText(Path.Combine(gameDir, "dlssg_sm86.ini"), ini);
+
+        var secondRoot = CreatePackage("0.4.1", [8]);
+        File.WriteAllBytes(Path.Combine(secondRoot, "dlssg_sm86", "notes.bin"), [42]);
+        var second = PackageFor(secondRoot, "0.4.1");
+        var update = Request(game, second);
+        update.IsUpdate = true;
+        Assert.True(harness.Service.Install(update, CancellationToken.None).Success);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal(original.BackupPath, game.Installation!.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase)).BackupPath);
+        var snapshot = game.Installation.RollbackDirectory!;
+        var snapshotJson = File.ReadAllText(Path.Combine(snapshot, "snapshot.json"));
+
+        harness.Processes.Running = true;
+        var running = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.Equal("running", running.ErrorCode);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        harness.Processes.Running = false;
+
+        var payload = Path.Combine(snapshot, "files", "dlssg_sm86", "backend", "sm86_backend.dll");
+        File.WriteAllBytes(payload, [99]);
+        var mismatch = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.Equal("rollback", mismatch.ErrorCode);
+        Assert.Contains("hash", mismatch.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        File.WriteAllBytes(payload, [2]);
+
+        File.Delete(payload);
+        var missing = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.Equal("rollback", missing.ErrorCode);
+        Assert.Contains("missing", missing.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        File.WriteAllBytes(payload, [2]);
+
+        File.WriteAllText(Path.Combine(snapshot, "snapshot.json"), "{not json");
+        var corrupt = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.Equal("rollback", corrupt.ErrorCode);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        File.WriteAllText(Path.Combine(snapshot, "snapshot.json"), snapshotJson);
+
+        harness.Service.FailAfterAppliedSteps = 1;
+        var interrupted = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.False(interrupted.Success);
+        Assert.Equal("rolled-back", interrupted.ErrorCode);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal(new byte[] { 42 }, File.ReadAllBytes(Path.Combine(gameDir, "dlssg_sm86", "notes.bin")));
+        Assert.True(File.Exists(Path.Combine(snapshot, "snapshot.json")));
+        Assert.NotEmpty(Directory.EnumerateFiles(harness.Paths.Journals, "*.json"));
+
+        harness.Service.FailAfterAppliedSteps = 0;
+        var rolled = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.True(rolled.Success, rolled.Message);
+        Assert.Equal(new byte[] { 7 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.False(File.Exists(Path.Combine(gameDir, "dlssg_sm86", "notes.bin")));
+        Assert.Equal("leave this file", File.ReadAllText(Path.Combine(gameDir, "keep-me.txt")));
+        Assert.Equal("0.4.0", game.Installation!.ReleaseTag);
+        Assert.Equal(original.BackupPath, game.Installation.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase)).BackupPath);
+        Assert.Equal(original.OriginalSha256, game.Installation.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase)).OriginalSha256);
+        var marker = Path.Combine(gameDir, "dlssg_sm86", "manager-ownership.json");
+        Assert.DoesNotContain("manager-ownership.json", File.ReadAllText(marker), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Hashing.Sha256File(marker), game.Installation.Files.Single(file => file.RelativePath.EndsWith("manager-ownership.json", StringComparison.OrdinalIgnoreCase)).Sha256);
+        Assert.Equal(ini, File.ReadAllText(Path.Combine(gameDir, "dlssg_sm86.ini")));
+    }
+
+    [Fact]
+    public void Interrupted_rollback_journal_is_recovered_and_a_broken_undo_is_kept()
+    {
+        var harness = CreateHarness();
+        var gameDir = Path.Combine(_root, "journal");
+        Directory.CreateDirectory(gameDir);
+        var dll = Path.Combine(gameDir, "version.dll");
+        File.WriteAllBytes(dll, [99]);
+        var backup = Path.Combine(_root, "version-before.dll");
+        File.WriteAllBytes(backup, [8]);
+        var journal = new InstallJournal
+        {
+            GameId = "journal-game",
+            State = "rollback",
+            Operations = [new JournalOperation { Kind = "replace", Path = dll, BackupPath = backup, Existed = true }]
+        };
+        File.WriteAllText(Path.Combine(harness.Paths.Journals, journal.Id + ".json"), JsonSerializer.Serialize(journal));
+        Assert.Equal(1, harness.Service.RecoverInterrupted());
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(dll));
+        var saved = JsonSerializer.Deserialize<InstallJournal>(File.ReadAllText(Path.Combine(harness.Paths.Journals, journal.Id + ".json")));
+        Assert.Equal("recovered", saved!.State);
+        Assert.Equal(0, harness.Service.RecoverInterrupted());
+
+        var stuck = new InstallJournal
+        {
+            State = "rollback",
+            Operations = [new JournalOperation { Kind = "replace", Path = dll, BackupPath = Path.Combine(_root, "missing-backup.dll"), Existed = true }]
+        };
+        File.WriteAllBytes(dll, [99]);
+        File.WriteAllText(Path.Combine(harness.Paths.Journals, stuck.Id + ".json"), JsonSerializer.Serialize(stuck));
+        Assert.Equal(0, harness.Service.RecoverInterrupted());
+        Assert.Equal(1, harness.Service.UnresolvedRecoveries);
+        Assert.Equal(new byte[] { 99 }, File.ReadAllBytes(dll));
+        var kept = JsonSerializer.Deserialize<InstallJournal>(File.ReadAllText(Path.Combine(harness.Paths.Journals, stuck.Id + ".json")));
+        Assert.Equal("recovery-incomplete", kept!.State);
+        Assert.True(File.Exists(Path.Combine(harness.Paths.Journals, stuck.Id + ".json")));
+    }
+
+    [Fact]
+    public void Repair_is_preflighted_and_a_midway_failure_restores_the_previous_files()
+    {
+        var harness = CreateHarness();
+        var gameDir = Path.Combine(_root, "repair");
+        Directory.CreateDirectory(gameDir);
+        var exe = Path.Combine(gameDir, "game.exe");
+        File.WriteAllBytes(exe, [1]);
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), "USER"u8.ToArray());
+        var game = TestGame(gameDir, exe);
+        var packageRoot = CreatePackage("0.4.0", [7]);
+        var package = PackageFor(packageRoot, "0.4.0");
+        Assert.True(harness.Service.Install(Request(game, package), CancellationToken.None).Success);
+        var iniPath = Path.Combine(gameDir, "dlssg_sm86.ini");
+        File.WriteAllText(iniPath, "[General]\r\nEnabled=0\r\nCustom=kept\r\n");
+        var backend = Path.Combine(gameDir, "dlssg_sm86", "backend", "sm86_backend.dll");
+        var runtime = Path.Combine(gameDir, "dlssg_sm86", "runtime", "nvngx_dlssg.dll");
+        File.WriteAllBytes(backend, [30]);
+
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), [4, 4]);
+        var refused = harness.Service.Repair(game, package, CancellationToken.None);
+        Assert.Equal("ownership", refused.ErrorCode);
+        Assert.Equal(new byte[] { 4, 4 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal(new byte[] { 30 }, File.ReadAllBytes(backend));
+        Assert.Equal("[General]\r\nEnabled=0\r\nCustom=kept\r\n", File.ReadAllText(iniPath));
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), [7]);
+
+        File.Delete(Path.Combine(packageRoot, "dlssg_sm86", "backend", "sm86_backend.dll"));
+        var missingSource = harness.Service.Repair(game, package, CancellationToken.None);
+        Assert.Equal("source", missingSource.ErrorCode);
+        Assert.Equal(new byte[] { 30 }, File.ReadAllBytes(backend));
+        File.WriteAllBytes(Path.Combine(packageRoot, "dlssg_sm86", "backend", "sm86_backend.dll"), [2]);
+        File.WriteAllBytes(runtime, [31]);
+
+        harness.Service.FailAfterAppliedSteps = 1;
+        var failed = harness.Service.Repair(game, package, CancellationToken.None);
+        Assert.Equal("rolled-back", failed.ErrorCode);
+        Assert.Equal(new byte[] { 30 }, File.ReadAllBytes(backend));
+        Assert.Equal(new byte[] { 31 }, File.ReadAllBytes(runtime));
+        Assert.Equal("[General]\r\nEnabled=0\r\nCustom=kept\r\n", File.ReadAllText(iniPath));
+
+        harness.Service.FailAfterAppliedSteps = 0;
+        var repaired = harness.Service.Repair(game, package, CancellationToken.None);
+        Assert.True(repaired.Success, repaired.Message);
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(backend));
+        Assert.Equal(new byte[] { 3 }, File.ReadAllBytes(runtime));
+        Assert.Equal(new byte[] { 7 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal("[General]\r\nEnabled=0\r\nCustom=kept\r\n", File.ReadAllText(iniPath));
+        Assert.Equal(ModInstallState.ConfigurationModified, game.Installation!.State);
+    }
+
+    [Fact]
+    public void Snapshot_failures_keep_the_previous_snapshot()
+    {
+        var harness = CreateHarness();
+        var gameDir = Path.Combine(_root, "snapshot");
+        Directory.CreateDirectory(gameDir);
+        var exe = Path.Combine(gameDir, "game.exe");
+        File.WriteAllBytes(exe, [1]);
+        File.WriteAllBytes(Path.Combine(gameDir, "version.dll"), "ORIG"u8.ToArray());
+        var game = TestGame(gameDir, exe);
+        Assert.True(harness.Service.Install(Request(game, PackageFor(CreatePackage("0.4.0", [7]), "0.4.0")), CancellationToken.None).Success);
+        var update = Request(game, PackageFor(CreatePackage("0.4.1", [8]), "0.4.1"));
+        update.IsUpdate = true;
+        Assert.True(harness.Service.Install(update, CancellationToken.None).Success);
+        var firstSnapshot = Path.Combine(harness.Paths.DefaultBackups, game.Id, "rollback", "0.4.0");
+        Assert.Equal(new byte[] { 7 }, File.ReadAllBytes(Path.Combine(firstSnapshot, "files", "version.dll")));
+
+        harness.Service.FailSnapshotBeforePromote = true;
+        var next = Request(game, PackageFor(CreatePackage("0.4.2", [9]), "0.4.2"));
+        next.IsUpdate = true;
+        var stopped = harness.Service.Install(next, CancellationToken.None);
+        Assert.Equal("snapshot", stopped.ErrorCode);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal(new byte[] { 7 }, File.ReadAllBytes(Path.Combine(firstSnapshot, "files", "version.dll")));
+        Assert.False(Directory.Exists(Path.Combine(harness.Paths.DefaultBackups, game.Id, "rollback", "0.4.1")));
+        Assert.Empty(Directory.EnumerateDirectories(Path.Combine(harness.Paths.DefaultBackups, game.Id, "rollback"), "*.staging-*"));
+
+        harness.Service.FailSnapshotBeforePromote = false;
+        Assert.True(harness.Service.Install(next, CancellationToken.None).Success);
+        var rolled = harness.Service.Rollback(game, CancellationToken.None);
+        Assert.True(rolled.Success, rolled.Message);
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(Path.Combine(gameDir, "version.dll")));
+        Assert.Equal("ORIG"u8.ToArray(), File.ReadAllBytes(game.Installation!.Files.Single(file => file.RelativePath.Equals("version.dll", StringComparison.OrdinalIgnoreCase)).BackupPath!));
+    }
+
+    [Fact]
+    public void Startup_checks_pass_in_a_temporary_directory_and_fail_when_it_is_unusable()
+    {
+        var data = Path.Combine(_root, "self-test");
+        var lines = new List<string>();
+        Assert.Equal(0, StartupChecks.Run(data, lines));
+        Assert.Contains(lines, line => line == "result: pass");
+        Assert.Contains(lines, line => line.StartsWith("version: ", StringComparison.Ordinal));
+        Assert.True(File.Exists(Path.Combine(data, "library.db")));
+
+        var blocked = Path.Combine(_root, "not-a-directory");
+        File.WriteAllText(blocked, "file");
+        var failed = new List<string>();
+        Assert.NotEqual(0, StartupChecks.Run(blocked, failed));
+        Assert.Contains(failed, line => line == "result: fail");
+    }
+
+    [Fact]
+    public void Application_version_metadata_matches_the_release_tag_form()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "DLSSGManager.sln")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        var project = File.ReadAllText(Path.Combine(dir!.FullName, "src", "DLSSGManager.App", "DLSSGManager.App.csproj"));
+        Assert.Contains("<Version>1.0.0</Version>", project, StringComparison.Ordinal);
+        Assert.Contains("<InformationalVersion>1.0.0</InformationalVersion>", project, StringComparison.Ordinal);
+        Assert.Contains("<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>", project, StringComparison.Ordinal);
+        var workflow = File.ReadAllText(Path.Combine(dir.FullName, ".github", "workflows", "release.yml"));
+        Assert.Contains("does not match application version", workflow, StringComparison.Ordinal);
+        Assert.Contains("--self-test", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Replaces_a_corrupt_library_database()
     {
         var root = Path.Combine(_root, "corrupt-db");
@@ -497,8 +733,9 @@ public class CoreTests : IDisposable
     {
         var paths = new AppDataPaths(Path.Combine(_root, "app-" + Guid.NewGuid().ToString("N")));
         var store = new LibraryStore(paths);
-        var service = new InstallationService(new BackupService(), new FakeProcesses(running), store, paths, () => new AppSettings(), new ConfigurationService());
-        return new Harness(paths, service);
+        var processes = new FakeProcesses(running);
+        var service = new InstallationService(new BackupService(), processes, store, paths, () => new AppSettings(), new ConfigurationService());
+        return new Harness(paths, service, processes);
     }
 
     private static HardwareSnapshot Snap(string name, string driver, bool? hags, uint vendor = 0x10DE) => new()
@@ -512,10 +749,11 @@ public class CoreTests : IDisposable
         HagsDetail = "test"
     };
 
-    private sealed record Harness(AppDataPaths Paths, InstallationService Service);
+    private sealed record Harness(AppDataPaths Paths, InstallationService Service, FakeProcesses Processes);
 
     private sealed class FakeProcesses(bool running) : DLSSGManager.Core.Abstractions.IProcessInspector
     {
-        public bool IsExecutableRunning(string executablePath) => running;
+        public bool Running { get; set; } = running;
+        public bool IsExecutableRunning(string executablePath) => Running;
     }
 }

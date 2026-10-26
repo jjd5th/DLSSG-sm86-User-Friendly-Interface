@@ -56,7 +56,9 @@ public sealed class LibraryCoordinator
     {
         Session.Settings = _store.LoadSettings();
         var recovered = _install.RecoverInterrupted();
-        if (recovered > 0)
+        if (_install.UnresolvedRecoveries > 0)
+            Session.StatusText = $"{_install.UnresolvedRecoveries} interrupted operation(s) could not be undone. The journal and backups were kept for manual recovery.";
+        else if (recovered > 0)
             Session.StatusText = $"Recovered {recovered} interrupted installation(s).";
         var loaded = _store.LoadGames().Select(game => new GameItem(game)).ToList();
         Session.ReplaceGames(loaded);

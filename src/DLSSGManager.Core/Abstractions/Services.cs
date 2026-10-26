@@ -85,6 +85,7 @@ public interface IInstallationService
     InstallationRecord Inspect(GameRecord game, InstallationRecord? known, string? latestTag);
     IReadOnlyList<DllConflict> DetectConflicts(string installDirectory, IEnumerable<PlannedFile> plan, IEnumerable<OwnedFileRecord> owned);
     int RecoverInterrupted();
+    int UnresolvedRecoveries { get; }
 }
 
 public interface IBackupService

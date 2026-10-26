@@ -22,7 +22,8 @@ Windows SmartScreen can warn about an unsigned program. That warning is expected
 - **Install** copies the selected upstream release next to the rendering executable, after a backup. If another program already has a proxy DLL there, each file has to be approved. The app backs it up before replacing or removing it.
 - **Configure** edits `dlssg_sm86.ini`. Restart the game after saving. The mod does not reload the file while the game is running.
 - **Update** moves a game to a newer mod release and keeps the original game files that were backed up on the first install.
-- **Uninstall** restores those original files and puts back any third-party DLL this app removed. It does not restore merely the previous mod version. **Rollback** is the separate action that returns to the previous mod version.
+- **Rollback** returns the mod files to the previous mod release. It does not put the game back to the files it had before DLSSG Manager ever changed them. The original-file backup is kept.
+- **Uninstall** restores those original game files and puts back any third-party DLL this app removed. Use uninstall when you want the game directory as it was before the mod. Use rollback when you want the last mod version instead of the current one.
 - A finished install means the files were copied and checked. It does not mean frame generation is running. The game detail page says when a backend log shows an active route.
 
 ### Update DLSSG Manager
@@ -35,7 +36,9 @@ The Updates page checks `jjd5th/DLSSG_Manager_UI` separately from the mod. **Dow
 
 ### Where data is stored
 
-`%LOCALAPPDATA%\DLSSGManager` holds settings, the game library, backups, downloaded mod packages, and logs. The folder next to the EXE is not used for that data.
+`%LOCALAPPDATA%\DLSSGManager` holds settings, the game library, backups, downloaded mod packages, and logs. The folder next to the EXE is not used for that data. Updating or replacing `DLSSGManager.exe` does not clear that folder.
+
+Troubleshooting logs are in `%LOCALAPPDATA%\DLSSGManager\logs`. An interrupted install, update, rollback, repair, or uninstall leaves a journal in `%LOCALAPPDATA%\DLSSGManager\journals`. The next launch tries to undo it. If that undo cannot finish, the journal and backups stay on disk and the game is marked as needing manual recovery.
 
 ### Troubleshooting
 
@@ -74,13 +77,31 @@ dotnet publish src/DLSSGManager.App/DLSSGManager.App.csproj `
 
 The executable is `src/DLSSGManager.App/bin/publish/win-x64/DLSSGManager.exe`. The single-file host extracts native components such as SQLite when the process starts. That cache is managed by the runtime. Users do not install .NET separately.
 
+Check the published executable without opening the window:
+
+```powershell
+.\src\DLSSGManager.App\bin\publish\win-x64\DLSSGManager.exe --self-test --data $env:TEMP\dlssg-self-test --log $env:TEMP\dlssg-self-test.log
+Get-Content $env:TEMP\dlssg-self-test.log
+```
+
+Exit code 0 and a log line `result: pass` mean the runtime, SQLite, compatibility database, settings, and core services started. The check uses the directory given by `--data`, so it does not change `%LOCALAPPDATA%\DLSSGManager`. It does not scan games or use the network. A nonzero exit code means a required check failed. The same log is written because the published program is a Windows application and may have no console window.
+
+Copy that EXE to another Windows 10 or Windows 11 x64 PC, extract nothing else, and run the same command. That machine does not need the .NET SDK. `dotnet publish` succeeding on a developer PC is not that check.
+
 The same settings are in `src/DLSSGManager.App/Properties/PublishProfiles/win-x64.pubxml`. Trimming and Native AOT are not enabled.
 
 ### CI and releases
 
-- `.github/workflows/ci.yml` builds, tests, and checks the publish output on pull requests and pushes to `main`.
-- `.github/workflows/release.yml` runs on tags named `v*`. Tests must pass. It then publishes `DLSSGManager-<tag>-win-x64.zip` and `SHA256SUMS.txt` to a GitHub Release.
+- `.github/workflows/ci.yml` restores, builds, tests, publishes, and runs `DLSSGManager.exe --self-test` on GitHub-hosted Windows. The self-test must exit 0 within 90 seconds.
+- `.github/workflows/release.yml` runs on tags named `v*`, such as `v1.0.0`. The tag must match `<Version>` in `src/DLSSGManager.App/DLSSGManager.App.csproj` (`v1.0.0` for `1.0.0`). The workflow then builds, tests, and creates `DLSSGManager-<tag>-win-x64.zip` plus `SHA256SUMS.txt`. The ZIP is checked for `DLSSGManager.exe`, `README.md`, and `LICENSE` only. The extracted EXE must pass `--self-test` before the GitHub Release is created.
 
-Tag a release with `v1.0.0` after the version in `src/DLSSGManager.App/DLSSGManager.App.csproj` matches that number.
+Tag a release only after that version is the one in the project file:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+If the release workflow fails, open the failed job log. A tag mismatch names the tag and the project version; change one of them and push a new tag rather than reusing the failed one. A self-test failure prints `self-test.log` in the job log. A ZIP failure names the missing or extra file. The release is not created when an earlier step fails.
 
 Installer tests use temporary directories only. They do not modify real game installations.

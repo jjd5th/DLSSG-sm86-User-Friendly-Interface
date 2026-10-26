@@ -523,11 +523,14 @@ public sealed class ReleaseService : IReleaseService
             var latest = GitHubReleaseParser.Choose(releases, settings.IncludePrerelease, null);
             if (latest == null)
                 return (null, "No DLSSG Manager releases have been published.", false);
-            var current = typeof(ReleaseService).Assembly.GetName().Version?.ToString() ?? "1.0.0";
+            var current = AppVersion.Current();
             var update = ModVersion.IsNewer(latest.Tag, current);
+            var downgrade = ModVersion.IsNewer(current, latest.Tag);
             return (latest, update
                 ? $"DLSSG Manager {latest.Tag} is published. This copy is {current}. Open the release page to download it. The app does not replace its own executable."
-                : $"DLSSG Manager {current} is the newest published release.", update);
+                : downgrade
+                    ? $"This copy is {current}, which is newer than the published release {latest.Tag}. The running executable was not changed."
+                    : $"DLSSG Manager {current} is the newest published release.", update);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
