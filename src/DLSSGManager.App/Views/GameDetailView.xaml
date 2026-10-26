@@ -1,0 +1,64 @@
+<UserControl x:Class="DLSSGManager.Views.GameDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+            <Button Content="Back to games" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Command="{Binding BackCommand}"/>
+            <DockPanel Margin="0,8,0,12">
+                <Border Width="220" Height="96" Margin="0,0,16,0" CornerRadius="8" Background="{DynamicResource Brush.CardAlt}" ClipToBounds="True">
+                    <Grid>
+                        <TextBlock Text="{Binding Game.Initial}" FontSize="32" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Image Source="{Binding Game.ArtworkPath, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
+                    </Grid>
+                </Border>
+                <StackPanel>
+                    <TextBlock Text="{Binding Game.Name}" Style="{StaticResource Title}"/>
+                    <TextBlock Style="{StaticResource Muted}">
+                        <Run Text="{Binding Game.Launcher, Mode=OneWay}"/>
+                        <Run Text=" · "/>
+                        <Run Text="{Binding Game.Compatibility, Mode=OneWay}"/>
+                        <Run Text=" · "/>
+                        <Run Text="{Binding Game.ModStatus, Mode=OneWay}"/>
+                        <Run Text=" · "/>
+                        <Run Text="{Binding Game.Version, Mode=OneWay}"/>
+                    </TextBlock>
+                </StackPanel>
+            </DockPanel>
+            <WrapPanel>
+                <Button Content="Install" Style="{StaticResource PrimaryButton}" Command="{Binding InstallCommand}"/>
+                <Button Content="Configure" Style="{StaticResource SecondaryButton}" Command="{Binding ConfigureCommand}"/>
+                <Button Content="Update" Style="{StaticResource SecondaryButton}" Command="{Binding UpdateCommand}"/>
+                <Button Content="Repair" Style="{StaticResource SecondaryButton}" Command="{Binding RepairCommand}"/>
+                <Button Content="Uninstall" Style="{StaticResource SecondaryButton}" Command="{Binding UninstallCommand}"/>
+                <Button Content="Restore backup" Style="{StaticResource SecondaryButton}" Command="{Binding RestoreCommand}"/>
+                <Button Content="Rollback" Style="{StaticResource SecondaryButton}" Command="{Binding RollbackCommand}"/>
+                <Button Content="Open folder" Style="{StaticResource SecondaryButton}" Command="{Binding OpenFolderCommand}"/>
+                <Button Content="View log" Style="{StaticResource SecondaryButton}" Command="{Binding ViewLogCommand}"/>
+                <Button Content="Set executable" Style="{StaticResource SecondaryButton}" Command="{Binding ChooseExeCommand}"/>
+                <Button Content="Set folder" Style="{StaticResource SecondaryButton}" Command="{Binding ChooseFolderCommand}"/>
+                <Button Content="Exclude" Style="{StaticResource SecondaryButton}" Command="{Binding ExcludeCommand}"/>
+            </WrapPanel>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Compatibility" FontSize="18"/>
+                    <TextBlock Text="{Binding Explanation}" Margin="0,6,0,6"/>
+                    <TextBlock Text="{Binding Api, StringFormat=Graphics API: {0}}" Style="{StaticResource Muted}"/>
+                    <TextBlock Text="{Binding AntiCheat, StringFormat=Anti-cheat: {0}}" Style="{StaticResource Muted}"/>
+                    <TextBlock Text="{Binding Game.Record.ExecutablePath, StringFormat=Executable: {0}}" Style="{StaticResource Muted}" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding Game.Record.InstallPath, StringFormat=Folder: {0}}" Style="{StaticResource Muted}"/>
+                    <TextBlock Text="{Binding Game.Record.ExecutableReason, StringFormat=Selection: {0}}" Style="{StaticResource Muted}"/>
+                    <TextBlock Text="Evidence" Margin="0,10,0,4"/>
+                    <TextBlock Text="{Binding Evidence}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Runtime" FontSize="18"/>
+                    <TextBlock Text="{Binding Activation}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="Recent actions" Margin="0,10,0,4"/>
+                    <TextBlock Text="{Binding History}" TextWrapping="Wrap" Style="{StaticResource Muted}"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

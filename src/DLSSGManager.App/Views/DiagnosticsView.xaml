@@ -1,0 +1,16 @@
+<UserControl x:Class="DLSSGManager.Views.DiagnosticsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="Diagnostics" Style="{StaticResource Title}"/>
+            <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,8" Text="The export replaces your user profile path. Installed files are not treated as proof that frame generation is active."/>
+            <WrapPanel>
+                <Button Content="Refresh" Style="{StaticResource SecondaryButton}" Command="{Binding RefreshCommand}"/>
+                <Button Content="Export diagnostics" Style="{StaticResource PrimaryButton}" Command="{Binding ExportCommand}"/>
+                <Button Content="Import compatibility database" Style="{StaticResource SecondaryButton}" Command="{Binding ImportCommand}"/>
+            </WrapPanel>
+        </StackPanel>
+        <TextBox Text="{Binding Report}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
+    </DockPanel>
+</UserControl>

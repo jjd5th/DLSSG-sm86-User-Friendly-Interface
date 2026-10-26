@@ -1,0 +1,61 @@
+<UserControl x:Class="DLSSGManager.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+            <TextBlock Text="Dashboard" Style="{StaticResource Title}"/>
+            <TextBlock Margin="0,4,0,16" Style="{StaticResource Muted}" Text="System compatibility comes from the current DLSSG for SM86 requirements: Windows 10/11 x64, RTX 20 and newer, and an NVIDIA driver."/>
+            <WrapPanel>
+                <Button Content="{Binding ScanLabel}" Style="{StaticResource PrimaryButton}" Command="{Binding ScanCommand}"/>
+                <Button Content="Check for updates" Style="{StaticResource SecondaryButton}" Command="{Binding CheckCommand}"/>
+                <Button Content="Update all compatible" Style="{StaticResource SecondaryButton}" Command="{Binding UpdateAllCommand}"/>
+                <Button Content="Settings" Style="{StaticResource SecondaryButton}" Command="{Binding OpenSettingsCommand}"/>
+            </WrapPanel>
+            <UniformGrid Columns="3" Margin="0,8,0,0">
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="GPU" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding Gpu}" FontSize="18" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding GpuDetail}" Style="{StaticResource Muted}" Margin="0,6,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Compatibility" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding SystemStatus}" FontSize="18" Foreground="{Binding SystemStatus, Converter={StaticResource StatusBrush}}"/>
+                        <TextBlock Text="{Binding Reasons}" Style="{StaticResource Muted}" Margin="0,6,0,0" MaxHeight="88"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Driver and HAGS" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding Driver, StringFormat=Driver {0}}"/>
+                        <TextBlock Text="{Binding Hags, StringFormat=HAGS {0}}" Margin="0,4,0,8"/>
+                        <Button Content="HAGS help" Style="{StaticResource SecondaryButton}" Command="{Binding HagsHelpCommand}" Visibility="{Binding HagsOff, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Mod release" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding InstalledRelease, StringFormat=In use {0}}"/>
+                        <TextBlock Text="{Binding LatestRelease, StringFormat=Latest {0}}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Library" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding Total, StringFormat={}{0} games}"/>
+                        <TextBlock Text="{Binding Compatible, StringFormat={}{0} confirmed or likely}" Style="{StaticResource Muted}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Installations" Style="{StaticResource Muted}"/>
+                        <TextBlock Text="{Binding Modded, StringFormat={}{0} modded}"/>
+                        <TextBlock Text="{Binding Updates, StringFormat={}{0} need an update}" Style="{StaticResource Muted}"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

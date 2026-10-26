@@ -1,0 +1,39 @@
+<UserControl x:Class="DLSSGManager.Views.UpdatesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="Updates" Style="{StaticResource Title}"/>
+            <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,8" Text="Mod updates and DLSSG Manager updates are separate. This page changes the mod on selected games. Manager updates open the GitHub release."/>
+            <WrapPanel>
+                <Button Content="Check for updates" Style="{StaticResource PrimaryButton}" Command="{Binding CheckCommand}"/>
+                <Button Content="Update selected" Style="{StaticResource SecondaryButton}" Command="{Binding UpdateSelectedCommand}"/>
+                <Button Content="Update all compatible" Style="{StaticResource SecondaryButton}" Command="{Binding UpdateCompatibleCommand}"/>
+                <Button Content="Release page" Style="{StaticResource SecondaryButton}" Command="{Binding OpenNotesCommand}"/>
+                <Button Content="Manager release" Style="{StaticResource SecondaryButton}" Command="{Binding OpenManagerCommand}"/>
+            </WrapPanel>
+            <TextBlock Text="{Binding Published, StringFormat=Published {0}}" Style="{StaticResource Muted}"/>
+            <TextBlock Text="{Binding Manager}" Margin="0,4,0,8" TextWrapping="Wrap"/>
+        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="360"/>
+            </Grid.ColumnDefinitions>
+            <DataGrid ItemsSource="{Binding Pending}" Margin="0,0,12,0" IsReadOnly="False">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding UpdateSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                    <DataGridTextColumn Header="Game" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Installed" Binding="{Binding Version}" Width="90" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Compatibility" Binding="{Binding Compatibility}" Width="120" IsReadOnly="True"/>
+                </DataGrid.Columns>
+            </DataGrid>
+            <Border Grid.Column="1" Style="{StaticResource Card}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Release notes" FontSize="18" Margin="0,0,0,8"/>
+                    <TextBox Text="{Binding Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</UserControl>

@@ -1,0 +1,20 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="Brush.Bg" Color="#FF10141C"/>
+    <SolidColorBrush x:Key="Brush.Sidebar" Color="#FF171C27"/>
+    <SolidColorBrush x:Key="Brush.Card" Color="#FF1D2433"/>
+    <SolidColorBrush x:Key="Brush.CardAlt" Color="#FF242C3D"/>
+    <SolidColorBrush x:Key="Brush.Line" Color="#FF313A4E"/>
+    <SolidColorBrush x:Key="Brush.Text" Color="#FFF4F7FB"/>
+    <SolidColorBrush x:Key="Brush.Muted" Color="#FFA7B1C2"/>
+    <SolidColorBrush x:Key="Brush.Input" Color="#FF121722"/>
+    <SolidColorBrush x:Key="Brush.Accent" Color="#FF3DDC97"/>
+    <SolidColorBrush x:Key="Brush.AccentText" Color="#FF06281A"/>
+    <SolidColorBrush x:Key="Brush.NavActive" Color="#FF243044"/>
+    <SolidColorBrush x:Key="Brush.Ok" Color="#FF3DDC97"/>
+    <SolidColorBrush x:Key="Brush.Info" Color="#FF7CC4FF"/>
+    <SolidColorBrush x:Key="Brush.Warning" Color="#FFFFC857"/>
+    <SolidColorBrush x:Key="Brush.Danger" Color="#FFFF6B6B"/>
+    <SolidColorBrush x:Key="Brush.Row" Color="#FF1A2130"/>
+    <SolidColorBrush x:Key="Brush.RowAlt" Color="#FF202838"/>
+</ResourceDictionary>

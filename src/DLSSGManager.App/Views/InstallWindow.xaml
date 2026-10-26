@@ -1,0 +1,27 @@
+<Window x:Class="DLSSGManager.InstallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Install DLSSG for SM86" Height="640" Width="720"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource Brush.Bg}"
+        Foreground="{DynamicResource Brush.Text}">
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="OkButton" Content="Install" Style="{StaticResource PrimaryButton}" Click="OnOk"/>
+            <Button Content="Cancel" Style="{StaticResource SecondaryButton}" IsCancel="True"/>
+        </StackPanel>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock x:Name="Heading" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock x:Name="Body" TextWrapping="Wrap" Margin="0,8,0,8"/>
+                <TextBlock Text="Proxy" Margin="0,8,0,4"/>
+                <ComboBox x:Name="ProxyBox"/>
+                <TextBlock Style="{StaticResource Muted}" Text="Use version.dll unless the game never loads it. Then replace it with the next alternative. Do not leave more than one of these proxies in the folder. dxgi.dll and d3d12.dll are last and never both." TextWrapping="Wrap" Margin="0,4,0,8"/>
+                <CheckBox x:Name="OverwriteBox" Content="Back up and replace the existing DLLs listed above"/>
+                <CheckBox x:Name="RemoveBox" Content="After backing them up, remove other proxy DLLs so only the selected one remains"/>
+                <CheckBox x:Name="AckBox" Content="I understand the warnings, including any self-signed or unsigned file notice" Checked="OnAck" Unchecked="OnAck"/>
+                <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,8,0,0"/>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

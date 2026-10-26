@@ -1,0 +1,53 @@
+﻿<Window x:Class="DLSSGManager.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DLSSGManager.ViewModels"
+        xmlns:views="clr-namespace:DLSSGManager.Views"
+        Title="DLSSG Manager"
+        Height="820" Width="1220" MinHeight="680" MinWidth="980"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Brush.Bg}"
+        Foreground="{DynamicResource Brush.Text}">
+    <Window.Resources>
+        <DataTemplate DataType="{x:Type vm:DashboardViewModel}"><views:DashboardView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:LibraryViewModel}"><views:LibraryView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:GameDetailViewModel}"><views:GameDetailView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:UpdatesViewModel}"><views:UpdatesView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}"><views:SettingsView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:DiagnosticsViewModel}"><views:DiagnosticsView/></DataTemplate>
+    </Window.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="228"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Border Grid.Column="0" Background="{DynamicResource Brush.Sidebar}" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="20,22,16,18">
+                    <TextBlock Text="DLSSG" FontSize="22" FontWeight="SemiBold"/>
+                    <TextBlock Text="Manager" Style="{StaticResource Muted}"/>
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom" Margin="20,16" Style="{StaticResource Muted}" Text="Manages the upstream DLSSG for SM86 mod. It does not replace its frame generation." TextWrapping="Wrap"/>
+                <StackPanel>
+                    <Button Content="Dashboard" Command="{Binding NavigateCommand}" CommandParameter="Dashboard" Style="{StaticResource NavButton}"/>
+                    <Button Content="Games" Command="{Binding NavigateCommand}" CommandParameter="Library" Style="{StaticResource NavButton}"/>
+                    <Button Content="Updates" Command="{Binding NavigateCommand}" CommandParameter="Updates" Style="{StaticResource NavButton}"/>
+                    <Button Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" Style="{StaticResource NavButton}"/>
+                    <Button Content="Diagnostics" Command="{Binding NavigateCommand}" CommandParameter="Diagnostics" Style="{StaticResource NavButton}"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <DockPanel Grid.Column="1" Margin="20,16,20,8">
+            <Border DockPanel.Dock="Bottom" Margin="0,8,0,0" Padding="0,8,0,0" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,1,0,0">
+                <DockPanel>
+                    <ProgressBar DockPanel.Dock="Right" Width="160" Height="6" Margin="12,0,0,0"
+                                 IsIndeterminate="{Binding Session.ProgressIndeterminate}"
+                                 Value="{Binding Session.Progress}"
+                                 Visibility="{Binding Session.IsBusy, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Text="{Binding Session.StatusText}" Style="{StaticResource Muted}" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+            <ContentControl Content="{Binding CurrentView}"/>
+        </DockPanel>
+    </Grid>
+</Window>

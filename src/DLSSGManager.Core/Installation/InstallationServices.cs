@@ -1,0 +1,678 @@
+using System.Text.Json;
+using DLSSGManager.Core.Abstractions;
+using DLSSGManager.Core.Configuration;
+using DLSSGManager.Core.Infrastructure;
+using DLSSGManager.Core.Models;
+using DLSSGManager.Core.Releases;
+
+namespace DLSSGManager.Core.Installation;
+
+public sealed class BackupService : IBackupService
+{
+    public string BackupFile(string sourcePath, string backupDirectory)
+    {
+        Directory.CreateDirectory(backupDirectory);
+        var name = Path.GetFileName(sourcePath);
+        var destination = Path.Combine(backupDirectory, name + "." + Hashing.Sha256File(sourcePath)[..12] + ".bak");
+        File.Copy(sourcePath, destination, overwrite: true);
+        return destination;
+    }
+
+    public void RestoreFile(string backupPath, string destinationPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        File.Copy(backupPath, destinationPath, overwrite: true);
+    }
+}
+
+public static class ConflictDetector
+{
+    public static IReadOnlyList<DllConflict> Detect(string installDirectory, IEnumerable<PlannedFile> plan, IEnumerable<OwnedFileRecord> owned, Func<string, string?> hashOf)
+    {
+        var conflicts = new List<DllConflict>();
+        var ownedMap = owned.ToDictionary(file => file.RelativePath, StringComparer.OrdinalIgnoreCase);
+        foreach (var item in plan.Where(file => !file.DeleteOnly))
+        {
+            var relative = item.DestinationRelativePath;
+            if (!ProxyNames.IsProxy(Path.GetFileName(relative)) && !relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var full = Path.Combine(installDirectory, relative);
+            var hash = hashOf(full);
+            if (hash == null)
+                continue;
+            if (ownedMap.TryGetValue(relative, out var record) && record.Sha256.Equals(hash, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!string.IsNullOrWhiteSpace(item.SourcePath) && File.Exists(item.SourcePath) && Hashing.Sha256File(item.SourcePath).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (item.Content != null && Hashing.Sha256Text(item.Content).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                continue;
+            conflicts.Add(new DllConflict
+            {
+                RelativePath = relative,
+                Reason = ownedMap.ContainsKey(relative)
+                    ? "The file was installed by DLSSG Manager and has since changed."
+                    : "The file already exists and was not installed by DLSSG Manager. It will not be overwritten without approval."
+            });
+        }
+        return conflicts;
+    }
+}
+
+public sealed class InstallJournal
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string GameId { get; set; } = "";
+    public string State { get; set; } = "in-progress";
+    public List<JournalOperation> Operations { get; set; } = [];
+}
+
+public sealed class JournalOperation
+{
+    public string Kind { get; set; } = "";
+    public string Path { get; set; } = "";
+    public string? BackupPath { get; set; }
+    public bool Existed { get; set; }
+}
+
+public sealed class InstallationService : IInstallationService
+{
+    private readonly IBackupService _backups;
+    private readonly IProcessInspector _processes;
+    private readonly ILibraryStore _store;
+    private readonly AppDataPaths _paths;
+    private readonly Func<AppSettings> _settings;
+    private readonly IConfigurationService _configuration;
+
+    public InstallationService(IBackupService backups, IProcessInspector processes, ILibraryStore store, AppDataPaths paths, Func<AppSettings> settings, IConfigurationService configuration)
+    {
+        _backups = backups;
+        _processes = processes;
+        _store = store;
+        _paths = paths;
+        _settings = settings;
+        _configuration = configuration;
+    }
+
+    public OperationResult Install(InstallRequest request, CancellationToken cancellationToken)
+    {
+        var log = new List<string>();
+        var game = request.Game;
+        var decision = game.Compatibility;
+        if (request.System.Status == SystemCompatibilityStatus.Unsupported)
+            return OperationResult.Fail(request.System.Summary + " " + string.Join(" ", request.System.Reasons), "system");
+        if (request.System.RequiresAcknowledgement && !request.AcknowledgeSystemWarning)
+            return OperationResult.Fail("The system compatibility warning has to be acknowledged before installation.", "system-ack");
+        if (decision == null)
+            return OperationResult.Fail("Scan this game before installing.", "compatibility");
+        if (decision.Status is GameCompatibilityStatus.Blocked or GameCompatibilityStatus.Unsupported)
+            return OperationResult.Fail(decision.Summary, "game-blocked");
+        if (decision.Status == GameCompatibilityStatus.Unknown && !request.AllowUnknownGame)
+            return OperationResult.Fail("Compatibility is unknown. Confirm a manual install before copying files.", "unknown-game");
+        if (!decision.ManualInstallAllowed && !decision.AutomaticInstallAllowed)
+            return OperationResult.Fail(decision.Summary, "game-blocked");
+        if (string.IsNullOrWhiteSpace(game.ExecutablePath) || !File.Exists(game.ExecutablePath))
+            return OperationResult.Fail("Choose the rendering executable before installing.", "executable");
+        if (game.ExecutableConfidence == ScanConfidence.Low && !request.AllowLowConfidenceExecutable)
+            return OperationResult.Fail("The rendering executable is uncertain. Confirm it before installing.", "executable");
+        if (!request.Package.Manifest.Confident && !request.AllowUncertainManifest)
+            return OperationResult.Fail(request.Package.Manifest.Uncertainty ?? "The release layout is not recognized.", "manifest");
+        var directory = Path.GetDirectoryName(game.ExecutablePath)!;
+        if (PathSafety.IsProtectedGamePath(directory))
+            return OperationResult.Fail("The executable is in a protected WindowsApps directory.", "protected");
+        if (_processes.IsExecutableRunning(game.ExecutablePath))
+            return OperationResult.Fail("The game is running. Close it before changing files.", "running");
+        if (!_paths.TryWritable(directory, out var writeError))
+            return OperationResult.Fail("The game folder is not writable. " + writeError, "access");
+
+        var proxy = request.ProxyFileName ?? request.Package.Manifest.DefaultProxy;
+        var existing = game.Installation ?? _store.LoadInstallation(game.Id);
+        var deletes = OwnedProxiesToRemove(directory, existing, proxy);
+        if (request.RemoveUnownedProxies)
+        {
+            foreach (var name in ProxyNames.Order)
+            {
+                if (name.Equals(proxy, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (File.Exists(Path.Combine(directory, name)))
+                    deletes.Add(name);
+            }
+        }
+        string? configText = request.ConfigurationText;
+        var warnings = new List<string>();
+        if (configText == null && existing != null)
+        {
+            var oldIni = Path.Combine(directory, "dlssg_sm86.ini");
+            var newIni = Path.Combine(request.Package.Manifest.PackageRoot, "dlssg_sm86.ini");
+            if (File.Exists(oldIni) && File.Exists(newIni))
+            {
+                var migrated = _configuration.Parse(File.ReadAllText(newIni));
+                warnings.AddRange(_configuration.Migrate(IniDocument.Parse(File.ReadAllText(oldIni)), migrated.Document));
+                configText = migrated.Text;
+            }
+        }
+        IReadOnlyList<PlannedFile> plan;
+        try
+        {
+            plan = InstallPlanner.Plan(request.Package.Manifest, proxy, configText, deletes);
+        }
+        catch (Exception ex)
+        {
+            return OperationResult.Fail(ex.Message, "plan");
+        }
+        var conflicts = DetectConflicts(directory, plan, existing?.Files ?? []);
+        if (conflicts.Count > 0 && !request.OverwriteConflicts)
+            return OperationResult.Fail("Existing DLLs need approval before they can be replaced.", "conflict", conflicts: conflicts);
+
+        var bytes = plan.Where(file => file.SourcePath != null && File.Exists(file.SourcePath)).Sum(file => new FileInfo(file.SourcePath!).Length);
+        try
+        {
+            if (new DriveInfo(Path.GetPathRoot(Path.GetFullPath(directory))!).AvailableFreeSpace < bytes + 200L * 1024 * 1024)
+                return OperationResult.Fail("There is not enough free disk space to install and keep a backup.", "disk");
+        }
+        catch (Exception ex)
+        {
+            log.Add("Free space could not be checked: " + ex.Message);
+        }
+
+        if (request.IsUpdate && existing != null)
+            SnapshotRollback(directory, existing);
+
+        var journal = new InstallJournal { GameId = game.Id };
+        WriteJournal(journal);
+        var backupRoot = Path.Combine(BackupRoot(), game.Id, DateTime.UtcNow.ToString("yyyyMMddHHmmss"));
+        Directory.CreateDirectory(backupRoot);
+        var owned = new List<OwnedFileRecord>();
+        try
+        {
+            foreach (var step in plan)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var destination = PathSafety.CombineUnderRoot(directory, step.DestinationRelativePath);
+                if (step.DeleteOnly)
+                {
+                    if (!File.Exists(destination))
+                        continue;
+                    var removedBackup = _backups.BackupFile(destination, backupRoot);
+                    journal.Operations.Add(new JournalOperation { Kind = "delete", Path = destination, BackupPath = removedBackup, Existed = true });
+                    WriteJournal(journal);
+                    File.Delete(destination);
+                    log.Add("Removed " + step.DestinationRelativePath);
+                    continue;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                var existed = File.Exists(destination);
+                string? backup = null;
+                string? originalHash = null;
+                if (existed)
+                {
+                    originalHash = Hashing.Sha256File(destination);
+                    backup = _backups.BackupFile(destination, backupRoot);
+                    journal.Operations.Add(new JournalOperation { Kind = "replace", Path = destination, BackupPath = backup, Existed = true });
+                }
+                else
+                {
+                    journal.Operations.Add(new JournalOperation { Kind = "create", Path = destination, Existed = false });
+                }
+                WriteJournal(journal);
+                if (step.Content != null)
+                    File.WriteAllText(destination, step.Content);
+                else if (step.SourcePath != null)
+                    File.Copy(step.SourcePath, destination, overwrite: true);
+                else
+                    throw new InvalidOperationException("A planned file has no source.");
+                var hash = Hashing.Sha256File(destination);
+                if (step.SourcePath != null && !hash.Equals(Hashing.Sha256File(step.SourcePath), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(step.DestinationRelativePath + " failed verification.");
+                owned.Add(new OwnedFileRecord
+                {
+                    RelativePath = step.DestinationRelativePath.Replace('/', '\\'),
+                    Sha256 = hash,
+                    Size = new FileInfo(destination).Length,
+                    OriginalExisted = existed,
+                    OriginalSha256 = originalHash,
+                    BackupPath = backup,
+                    IsConfiguration = step.IsConfiguration
+                });
+                log.Add("Installed " + step.DestinationRelativePath);
+            }
+
+            var markerRel = string.IsNullOrWhiteSpace(request.Package.Manifest.PayloadDirectory)
+                ? "manager-ownership.json"
+                : Path.Combine(request.Package.Manifest.PayloadDirectory, "manager-ownership.json");
+            var record = new InstallationRecord
+            {
+                GameId = game.Id,
+                ReleaseTag = request.Package.Release.Tag,
+                ManifestId = request.Package.Manifest.Id,
+                InstallDirectory = directory,
+                ProxyFileName = proxy,
+                State = ModInstallState.InstalledVerified,
+                InstalledUtc = DateTimeOffset.UtcNow,
+                VerifiedUtc = DateTimeOffset.UtcNow,
+                PreviousReleaseTag = existing?.ReleaseTag,
+                RollbackDirectory = existing == null ? null : Path.Combine(BackupRoot(), game.Id, "rollback", existing.ReleaseTag),
+                Files = owned
+            };
+            var markerPath = PathSafety.CombineUnderRoot(directory, markerRel);
+            Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
+            File.WriteAllText(markerPath, JsonSerializer.Serialize(record, Json()));
+            var markerHash = Hashing.Sha256File(markerPath);
+            owned.Add(new OwnedFileRecord
+            {
+                RelativePath = markerRel,
+                Sha256 = markerHash,
+                Size = new FileInfo(markerPath).Length,
+                IsConfiguration = true
+            });
+            record.Files = owned;
+            File.WriteAllText(markerPath, JsonSerializer.Serialize(record, Json()));
+            owned[^1].Sha256 = Hashing.Sha256File(markerPath);
+            _store.SaveInstallation(record);
+            game.Installation = record;
+            journal.State = "complete";
+            File.Delete(JournalPath(journal.Id));
+            _store.AppendLog(game.Id, request.IsUpdate ? "update" : "install", "success", request.Package.Release.Tag);
+            var message = request.IsUpdate
+                ? $"Updated {game.Name} to {request.Package.Release.Tag}."
+                : $"Installed {request.Package.Release.Tag} for {game.Name}.";
+            return OperationResult.Ok(message + " Restart the game after any configuration change. File installation does not prove frame generation is active.", log, warnings);
+        }
+        catch (Exception ex)
+        {
+            RollbackJournal(journal);
+            journal.State = "rolled-back";
+            WriteJournal(journal);
+            _store.AppendLog(game.Id, "install", "rolled-back", ex.Message);
+            return OperationResult.Fail("Installation failed and the previous files were restored. " + ex.Message, "rolled-back", log);
+        }
+    }
+
+    public OperationResult Uninstall(GameRecord game, bool restoreOriginalsOnly, CancellationToken cancellationToken)
+    {
+        var record = game.Installation ?? _store.LoadInstallation(game.Id);
+        if (record == null)
+            return OperationResult.Fail("DLSSG Manager has no record of files it installed for this game, so nothing will be deleted.", "ownership");
+        if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
+            return OperationResult.Fail("The game is running. Close it first.", "running");
+        var problems = new List<string>();
+        foreach (var file in record.Files)
+        {
+            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+            if (!File.Exists(path))
+                continue;
+            var hash = Hashing.Sha256File(path);
+            var configWeCreated = file.IsConfiguration && !file.OriginalExisted;
+            if (!hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) && !configWeCreated)
+                problems.Add(file.RelativePath + " no longer matches the installed file.");
+        }
+        if (problems.Count > 0)
+        {
+            record.State = ModInstallState.ManualIntervention;
+            record.LastError = string.Join(" ", problems);
+            _store.SaveInstallation(record);
+            return OperationResult.Fail("Ownership could not be confirmed, so no files were changed. " + record.LastError, "ownership");
+        }
+
+        foreach (var file in record.Files.OrderByDescending(item => item.RelativePath.Length))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+            if (!File.Exists(path))
+                continue;
+            if (file.OriginalExisted && !string.IsNullOrWhiteSpace(file.BackupPath) && File.Exists(file.BackupPath))
+            {
+                if (file.OriginalSha256 != null && !Hashing.Sha256File(file.BackupPath).Equals(file.OriginalSha256, StringComparison.OrdinalIgnoreCase))
+                    return OperationResult.Fail("A backup no longer matches the original it was taken from: " + file.RelativePath, "backup");
+                _backups.RestoreFile(file.BackupPath, path);
+            }
+            else
+            {
+                File.Delete(path);
+            }
+        }
+        var payload = Path.Combine(record.InstallDirectory, "dlssg_sm86");
+        if (Directory.Exists(payload) && !Directory.EnumerateFiles(payload, "*", SearchOption.AllDirectories).Any())
+            Directory.Delete(payload, true);
+        _store.DeleteInstallation(game.Id);
+        game.Installation = null;
+        _store.AppendLog(game.Id, restoreOriginalsOnly ? "restore-backup" : "uninstall", "success", record.ReleaseTag);
+        return OperationResult.Ok(restoreOriginalsOnly
+            ? $"Restored the original files and removed the mod files DLSSG Manager owns for {game.Name}."
+            : $"Uninstalled DLSSG for SM86 from {game.Name} and restored original files.");
+    }
+
+    public OperationResult Repair(GameRecord game, PreparedPackage package, CancellationToken cancellationToken)
+    {
+        var record = game.Installation ?? _store.LoadInstallation(game.Id);
+        if (record == null)
+            return OperationResult.Fail("There is no recorded installation to repair.", "ownership");
+        if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
+            return OperationResult.Fail("The game is running. Close it first.", "running");
+        var repaired = new List<string>();
+        foreach (var file in package.Manifest.Files.Where(item => item.Role is "payload" or "proxy" or "alternative"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (file.Role == "proxy" && !file.DestinationRelativePath.Equals(record.ProxyFileName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (file.Role == "alternative")
+                continue;
+            var destination = Path.Combine(record.InstallDirectory, file.DestinationRelativePath);
+            var source = Path.Combine(package.Manifest.PackageRoot, file.PackageRelativePath);
+            if (!File.Exists(source))
+                continue;
+            var sourceHash = Hashing.Sha256File(source);
+            if (File.Exists(destination))
+            {
+                var current = Hashing.Sha256File(destination);
+                if (current.Equals(sourceHash, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var owned = record.Files.FirstOrDefault(item => item.RelativePath.Equals(file.DestinationRelativePath, StringComparison.OrdinalIgnoreCase));
+                if (owned == null || !owned.Sha256.Equals(current, StringComparison.OrdinalIgnoreCase))
+                    return OperationResult.Fail(file.DestinationRelativePath + " was changed by something else. Repair will not overwrite it.", "ownership");
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+            var updated = record.Files.FirstOrDefault(item => item.RelativePath.Equals(file.DestinationRelativePath, StringComparison.OrdinalIgnoreCase));
+            if (updated == null)
+            {
+                record.Files.Add(new OwnedFileRecord
+                {
+                    RelativePath = file.DestinationRelativePath,
+                    Sha256 = sourceHash,
+                    Size = new FileInfo(destination).Length
+                });
+            }
+            else
+            {
+                updated.Sha256 = sourceHash;
+                updated.Size = new FileInfo(destination).Length;
+            }
+            repaired.Add(file.DestinationRelativePath);
+        }
+        record.State = ModInstallState.InstalledVerified;
+        record.VerifiedUtc = DateTimeOffset.UtcNow;
+        record.LastError = null;
+        _store.SaveInstallation(record);
+        game.Installation = Inspect(game, record, package.Release.Tag);
+        return OperationResult.Ok(repaired.Count == 0
+            ? "The recorded files already match the release. The configuration file was left as it is."
+            : "Repaired " + string.Join(", ", repaired) + ". The configuration file was not reset.");
+    }
+
+    public OperationResult Rollback(GameRecord game, CancellationToken cancellationToken)
+    {
+        var record = game.Installation ?? _store.LoadInstallation(game.Id);
+        if (record?.RollbackDirectory == null || !Directory.Exists(record.RollbackDirectory))
+            return OperationResult.Fail("There is no previous version snapshot to restore.", "rollback");
+        if (!string.IsNullOrWhiteSpace(game.ExecutablePath) && _processes.IsExecutableRunning(game.ExecutablePath))
+            return OperationResult.Fail("The game is running. Close it first.", "running");
+        var snapshotFile = Path.Combine(record.RollbackDirectory, "snapshot.json");
+        if (!File.Exists(snapshotFile))
+            return OperationResult.Fail("The rollback snapshot is incomplete.", "rollback");
+        var snapshot = JsonSerializer.Deserialize<InstallationRecord>(File.ReadAllText(snapshotFile), Json()) ?? throw new InvalidOperationException("Rollback snapshot could not be read.");
+        foreach (var file in record.Files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = Path.Combine(record.InstallDirectory, file.RelativePath);
+            if (!File.Exists(path))
+                continue;
+            if (!Hashing.Sha256File(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) && !file.IsConfiguration)
+                return OperationResult.Fail("A current file no longer matches the recorded install, so rollback stopped: " + file.RelativePath, "ownership");
+            if (!snapshot.Files.Any(item => item.RelativePath.Equals(file.RelativePath, StringComparison.OrdinalIgnoreCase)))
+                File.Delete(path);
+        }
+        foreach (var file in snapshot.Files)
+        {
+            var source = Path.Combine(record.RollbackDirectory, "files", file.RelativePath);
+            if (!File.Exists(source))
+                continue;
+            var destination = Path.Combine(record.InstallDirectory, file.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+        }
+        snapshot.RollbackDirectory = null;
+        snapshot.PreviousReleaseTag = record.ReleaseTag;
+        _store.SaveInstallation(snapshot);
+        game.Installation = snapshot;
+        _store.AppendLog(game.Id, "rollback", "success", snapshot.ReleaseTag);
+        return OperationResult.Ok($"Rolled {game.Name} back to {snapshot.ReleaseTag}.");
+    }
+
+    public InstallationRecord Inspect(GameRecord game, InstallationRecord? known, string? latestTag)
+    {
+        known ??= _store.LoadInstallation(game.Id);
+        var directory = string.IsNullOrWhiteSpace(game.ExecutablePath) ? game.InstallPath : Path.GetDirectoryName(game.ExecutablePath)!;
+        var marker = FindMarker(directory);
+        known ??= marker;
+        if (known == null)
+        {
+            var stray = File.Exists(Path.Combine(directory, "dlssg_sm86.ini")) || Directory.Exists(Path.Combine(directory, "dlssg_sm86"));
+            return new InstallationRecord
+            {
+                GameId = game.Id,
+                ReleaseTag = "",
+                ManifestId = "",
+                InstallDirectory = directory,
+                ProxyFileName = "",
+                State = stray ? ModInstallState.ManualIntervention : ModInstallState.NotInstalled,
+                LastError = stray ? "DLSSG files are present, but this manager did not install them. They will not be deleted automatically." : null
+            };
+        }
+
+        var missing = false;
+        var changed = false;
+        var configChanged = false;
+        foreach (var file in known.Files.Where(item => !item.RelativePath.EndsWith("manager-ownership.json", StringComparison.OrdinalIgnoreCase)))
+        {
+            var path = Path.Combine(known.InstallDirectory, file.RelativePath);
+            if (!File.Exists(path))
+            {
+                if (!file.IsConfiguration)
+                    missing = true;
+                continue;
+            }
+            var hash = Hashing.Sha256File(path);
+            if (hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (file.IsConfiguration)
+                configChanged = true;
+            else
+                changed = true;
+        }
+        var activation = ActivationReader.Read(known.InstallDirectory, out var activationDetail);
+        var state = ModInstallState.InstalledVerified;
+        if (changed)
+            state = ModInstallState.RepairRequired;
+        else if (missing)
+            state = ModInstallState.MissingFiles;
+        else if (!string.IsNullOrWhiteSpace(latestTag) && ModVersion.IsNewer(latestTag, known.ReleaseTag))
+            state = ModInstallState.UpdateAvailable;
+        else if (configChanged)
+            state = ModInstallState.ConfigurationModified;
+        known.State = state;
+        known.ConfigurationModified = configChanged;
+        known.Activation = activation;
+        known.ActivationDetail = activationDetail;
+        known.VerifiedUtc = DateTimeOffset.UtcNow;
+        return known;
+    }
+
+    public IReadOnlyList<DllConflict> DetectConflicts(string installDirectory, IEnumerable<PlannedFile> plan, IEnumerable<OwnedFileRecord> owned) =>
+        ConflictDetector.Detect(installDirectory, plan, owned, path => File.Exists(path) ? Hashing.Sha256File(path) : null);
+
+    public int RecoverInterrupted()
+    {
+        if (!Directory.Exists(_paths.Journals))
+            return 0;
+        var count = 0;
+        foreach (var file in Directory.EnumerateFiles(_paths.Journals, "*.json"))
+        {
+            InstallJournal? journal;
+            try
+            {
+                journal = JsonSerializer.Deserialize<InstallJournal>(File.ReadAllText(file), Json());
+            }
+            catch
+            {
+                continue;
+            }
+            if (journal == null || journal.State == "complete")
+                continue;
+            RollbackJournal(journal);
+            journal.State = "recovered";
+            File.WriteAllText(file, JsonSerializer.Serialize(journal, Json()));
+            count++;
+        }
+        return count;
+    }
+
+    private void SnapshotRollback(string directory, InstallationRecord existing)
+    {
+        var snapshotRoot = Path.Combine(BackupRoot(), existing.GameId, "rollback", existing.ReleaseTag);
+        if (Directory.Exists(snapshotRoot))
+            Directory.Delete(snapshotRoot, true);
+        Directory.CreateDirectory(Path.Combine(snapshotRoot, "files"));
+        foreach (var file in existing.Files)
+        {
+            var source = Path.Combine(directory, file.RelativePath);
+            if (!File.Exists(source))
+                continue;
+            var destination = Path.Combine(snapshotRoot, "files", file.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, true);
+        }
+        File.WriteAllText(Path.Combine(snapshotRoot, "snapshot.json"), JsonSerializer.Serialize(existing, Json()));
+    }
+
+    private static HashSet<string> OwnedProxiesToRemove(string directory, InstallationRecord? existing, string keep)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (existing == null)
+            return names;
+        foreach (var file in existing.Files)
+        {
+            var name = Path.GetFileName(file.RelativePath);
+            if (!ProxyNames.IsProxy(name) || name.Equals(keep, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var path = Path.Combine(directory, name);
+            if (File.Exists(path) && Hashing.Sha256File(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                names.Add(name);
+        }
+        return names;
+    }
+
+    private static InstallationRecord? FindMarker(string directory)
+    {
+        foreach (var relative in new[] { Path.Combine("dlssg_sm86", "manager-ownership.json"), "manager-ownership.json" })
+        {
+            var path = Path.Combine(directory, relative);
+            if (!File.Exists(path))
+                continue;
+            try
+            {
+                return JsonSerializer.Deserialize<InstallationRecord>(File.ReadAllText(path), Json());
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private void RollbackJournal(InstallJournal journal)
+    {
+        foreach (var operation in journal.Operations.AsEnumerable().Reverse())
+        {
+            try
+            {
+                if (operation.Kind == "create" && File.Exists(operation.Path))
+                    File.Delete(operation.Path);
+                else if (!string.IsNullOrWhiteSpace(operation.BackupPath) && File.Exists(operation.BackupPath))
+                    File.Copy(operation.BackupPath, operation.Path, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Rollback step failed for " + operation.Path, ex);
+            }
+        }
+    }
+
+    private void WriteJournal(InstallJournal journal)
+    {
+        Directory.CreateDirectory(_paths.Journals);
+        File.WriteAllText(JournalPath(journal.Id), JsonSerializer.Serialize(journal, Json()));
+    }
+
+    private string JournalPath(string id) => Path.Combine(_paths.Journals, id + ".json");
+
+    private string BackupRoot()
+    {
+        var custom = _settings().BackupDirectory;
+        return string.IsNullOrWhiteSpace(custom) ? _paths.DefaultBackups : custom;
+    }
+
+    private static JsonSerializerOptions Json() => new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+}
+
+file static class PathProbe
+{
+    public static bool TryWritable(this AppDataPaths _, string directory, out string? error)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, ".dlssg-manager-write-test");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+}
+
+public static class ActivationReader
+{
+    public static RuntimeActivation Read(string? installDirectory, out string detail)
+    {
+        detail = "No backend log was found. Installed files do not show that frame generation is active.";
+        if (string.IsNullOrWhiteSpace(installDirectory))
+            return RuntimeActivation.NotChecked;
+        var logs = Path.Combine(installDirectory, "dlssg_sm86", "logs");
+        if (!Directory.Exists(logs))
+        {
+            detail = "No dlssg_sm86\\logs directory yet. Launch the game with frame generation enabled, and set logging to 2 if you need a loader trace.";
+            return RuntimeActivation.NoLog;
+        }
+        var backend = Directory.EnumerateFiles(logs, "backend_*.jsonl").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+        if (backend == null)
+        {
+            detail = "A log folder exists, but there is no backend log.";
+            return RuntimeActivation.NoLog;
+        }
+        string text;
+        try
+        {
+            text = File.ReadAllText(backend);
+        }
+        catch (Exception ex)
+        {
+            detail = "The backend log could not be read: " + ex.Message;
+            return RuntimeActivation.NoLog;
+        }
+        var hasInstall = text.Contains("\"install\"", StringComparison.OrdinalIgnoreCase) || text.Contains("install", StringComparison.OrdinalIgnoreCase);
+        var active = text.Contains("\"active\":true", StringComparison.OrdinalIgnoreCase) || text.Contains("\"active\": true", StringComparison.OrdinalIgnoreCase);
+        if (hasInstall && active)
+        {
+            detail = "The newest backend log contains an install record with route active=true. That is runtime evidence, separate from the files merely being present.";
+            return RuntimeActivation.ActivationRecorded;
+        }
+        detail = "A backend log exists, but it does not contain both an install record and an active route. Frame generation is not reported as active.";
+        return RuntimeActivation.InstalledOnly;
+    }
+}
