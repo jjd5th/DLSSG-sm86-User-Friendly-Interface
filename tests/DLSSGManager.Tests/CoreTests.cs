@@ -620,8 +620,9 @@ public class CoreTests : IDisposable
             dir = dir.Parent;
         Assert.NotNull(dir);
         var project = File.ReadAllText(Path.Combine(dir!.FullName, "src", "DLSSGManager.App", "DLSSGManager.App.csproj"));
-        Assert.Contains("<Version>1.0.0</Version>", project, StringComparison.Ordinal);
-        Assert.Contains("<InformationalVersion>1.0.0</InformationalVersion>", project, StringComparison.Ordinal);
+        Assert.Contains("<Version>1.0.1</Version>", project, StringComparison.Ordinal);
+        Assert.Contains("<FileVersion>1.0.1.0</FileVersion>", project, StringComparison.Ordinal);
+        Assert.Contains("<InformationalVersion>1.0.1</InformationalVersion>", project, StringComparison.Ordinal);
         Assert.Contains("<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>", project, StringComparison.Ordinal);
         var workflow = File.ReadAllText(Path.Combine(dir.FullName, ".github", "workflows", "release.yml"));
         Assert.Contains("does not match application version", workflow, StringComparison.Ordinal);

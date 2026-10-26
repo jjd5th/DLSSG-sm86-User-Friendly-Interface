@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>DLSSGManager</RootNamespace>
     <AssemblyName>DLSSGManager</AssemblyName>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
-    <InformationalVersion>1.0.0</InformationalVersion>
+    <Version>1.0.1</Version>
+    <FileVersion>1.0.1.0</FileVersion>
+    <InformationalVersion>1.0.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>DLSSG Manager</Product>
     <Company>DLSSG Manager</Company>

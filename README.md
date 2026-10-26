@@ -93,13 +93,13 @@ The same settings are in `src/DLSSGManager.App/Properties/PublishProfiles/win-x6
 ### CI and releases
 
 - `.github/workflows/ci.yml` restores, builds, tests, publishes, and runs `DLSSGManager.exe --self-test` on GitHub-hosted Windows. The self-test must exit 0 within 90 seconds.
-- `.github/workflows/release.yml` runs on tags named `v*`, such as `v1.0.0`. The tag must match `<Version>` in `src/DLSSGManager.App/DLSSGManager.App.csproj` (`v1.0.0` for `1.0.0`). The workflow then builds, tests, and creates `DLSSGManager-<tag>-win-x64.zip` plus `SHA256SUMS.txt`. The ZIP is checked for `DLSSGManager.exe`, `README.md`, and `LICENSE` only. The extracted EXE must pass `--self-test` before the GitHub Release is created.
+- `.github/workflows/release.yml` runs when a `v*` tag is pushed, such as `v1.0.1`. The tag must match `<Version>` in `src/DLSSGManager.App/DLSSGManager.App.csproj` (`v1.0.1` for `1.0.1`). The workflow then builds, tests, and creates `DLSSGManager-<tag>-win-x64.zip` plus `SHA256SUMS.txt`. The ZIP is checked for `DLSSGManager.exe`, `README.md`, and `LICENSE` only. The extracted EXE must pass `--self-test` before the GitHub Release is created. Creating the release from the GitHub website does not run this workflow, so that release has no ZIP. Push the tag with git after the matching version is already on `main`.
 
 Tag a release only after that version is the one in the project file:
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 If the release workflow fails, open the failed job log. A tag mismatch names the tag and the project version; change one of them and push a new tag rather than reusing the failed one. A self-test failure prints `self-test.log` in the job log. A ZIP failure names the missing or extra file. The release is not created when an earlier step fails.

@@ -86,7 +86,8 @@ jobs:
           $summary = Get-Content $log -Raw
           if ($summary -notmatch "result: pass") { throw "The packaged executable self-test did not pass." }
           [xml]$project = Get-Content "src/DLSSGManager.App/DLSSGManager.App.csproj"
-          $version = "$($project.Project.PropertyGroup.Version)".Trim()
+          $version = @($project.Project.PropertyGroup.Version) | Where-Object { $_ } | Select-Object -First 1
+          $version = "$version".Trim()
           if ($summary -notmatch [regex]::Escape("version: $version")) { throw "The packaged executable did not report version $version." }
 
       - name: Publish the GitHub Release
