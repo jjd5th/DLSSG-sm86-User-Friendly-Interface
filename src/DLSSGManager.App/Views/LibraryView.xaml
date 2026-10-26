@@ -11,17 +11,19 @@
                 <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" ToolTip="Search games"/>
             </DockPanel>
         </StackPanel>
-        <DataGrid ItemsSource="{Binding View}" SelectedItem="{Binding Selected}" MouseDoubleClick="OnDoubleClick">
+        <DataGrid ItemsSource="{Binding View}" SelectedItem="{Binding Selected}" MouseDoubleClick="OnDoubleClick"
+                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Game" Binding="{Binding Name}" Width="*"/>
-                <DataGridTextColumn Header="Launcher" Binding="{Binding Launcher}" Width="120"/>
-                <DataGridTextColumn Header="Compatibility" Binding="{Binding Compatibility}" Width="140"/>
-                <DataGridTextColumn Header="Mod status" Binding="{Binding ModStatus}" Width="150"/>
-                <DataGridTextColumn Header="Version" Binding="{Binding Version}" Width="90"/>
-                <DataGridTemplateColumn Header="Action" Width="120">
+                <DataGridTextColumn Header="Game" Binding="{Binding Name}" Width="*" MinWidth="180"/>
+                <DataGridTextColumn Header="Launcher" Binding="{Binding Launcher}" Width="110"/>
+                <DataGridTextColumn Header="Compatibility" Binding="{Binding Compatibility}" Width="130"/>
+                <DataGridTextColumn Header="Mod status" Binding="{Binding ModStatus}" Width="140"/>
+                <DataGridTextColumn Header="Version" Binding="{Binding Version}" Width="80"/>
+                <DataGridTemplateColumn Header="Action" Width="132">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <Button Content="{Binding PrimaryAction}" Style="{StaticResource SecondaryButton}" Margin="0"
+                            <Button Content="{Binding PrimaryAction}" Style="{StaticResource SecondaryButton}"
+                                    Margin="0" Padding="8,4" MinHeight="28" HorizontalAlignment="Left"
                                     Command="{Binding DataContext.PrimaryCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                     CommandParameter="{Binding}"/>
                         </DataTemplate>

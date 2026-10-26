@@ -11,18 +11,18 @@
             <Button Content="Cancel" Style="{StaticResource SecondaryButton}" IsCancel="True"/>
         </StackPanel>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel>
+            <StackPanel Margin="0,0,8,12">
                 <TextBlock x:Name="Heading" FontSize="22" FontWeight="SemiBold"/>
                 <TextBlock x:Name="Body" TextWrapping="Wrap" Margin="0,8,0,8"/>
-                <TextBlock Text="Proxy" Margin="0,8,0,4"/>
+                <TextBlock Text="Proxy" Style="{StaticResource FieldLabel}"/>
                 <ComboBox x:Name="ProxyBox"/>
                 <TextBlock Style="{StaticResource Muted}" Text="Use version.dll unless the game never loads it. Then replace it with the next alternative. Do not leave more than one of these proxies in the folder. dxgi.dll and d3d12.dll are last and never both." TextWrapping="Wrap" Margin="0,4,0,8"/>
                 <CheckBox x:Name="OverwriteBox" Content="Back up and replace the existing DLLs listed above"/>
-                <TextBlock x:Name="ExtraHeading" Text="Other proxy DLLs" Margin="0,8,0,4"/>
+                <TextBlock x:Name="ExtraHeading" Text="Other proxy DLLs" Style="{StaticResource FieldLabel}"/>
                 <StackPanel x:Name="ExtraPanel"/>
                 <TextBlock x:Name="ExtraHelp" Style="{StaticResource Muted}" TextWrapping="Wrap" Text="Each file below belongs to something else. Installation continues only after you approve a verified backup and removal for every one of them. Unchecked files are left alone, and the install is cancelled."/>
                 <CheckBox x:Name="AckBox" Content="I understand the warnings, including any self-signed or unsigned file notice" Checked="OnAck" Unchecked="OnAck"/>
-                <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="{DynamicResource Brush.Warning}"/>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

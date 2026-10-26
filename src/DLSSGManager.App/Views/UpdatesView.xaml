@@ -21,17 +21,30 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="360"/>
             </Grid.ColumnDefinitions>
-            <DataGrid ItemsSource="{Binding Pending}" Margin="0,0,12,0" IsReadOnly="False">
+            <DataGrid ItemsSource="{Binding Pending}" Margin="0,0,12,0" IsReadOnly="False" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                 <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="" Binding="{Binding UpdateSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
-                    <DataGridTextColumn Header="Game" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding UpdateSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="52">
+                        <DataGridCheckBoxColumn.ElementStyle>
+                            <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="Margin" Value="0"/>
+                            </Style>
+                        </DataGridCheckBoxColumn.ElementStyle>
+                        <DataGridCheckBoxColumn.EditingElementStyle>
+                            <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="Margin" Value="0"/>
+                            </Style>
+                        </DataGridCheckBoxColumn.EditingElementStyle>
+                    </DataGridCheckBoxColumn>
+                    <DataGridTextColumn Header="Game" Binding="{Binding Name}" Width="*" MinWidth="160" IsReadOnly="True"/>
                     <DataGridTextColumn Header="Installed" Binding="{Binding Version}" Width="90" IsReadOnly="True"/>
                     <DataGridTextColumn Header="Compatibility" Binding="{Binding Compatibility}" Width="120" IsReadOnly="True"/>
                 </DataGrid.Columns>
             </DataGrid>
             <Border Grid.Column="1" Style="{StaticResource Card}">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Release notes" FontSize="18" Margin="0,0,0,8"/>
+                    <TextBlock DockPanel.Dock="Top" Text="Release notes" Style="{StaticResource Section}"/>
                     <TextBox Text="{Binding Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
                 </DockPanel>
             </Border>

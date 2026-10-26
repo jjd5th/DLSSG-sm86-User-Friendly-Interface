@@ -40,22 +40,22 @@
             </WrapPanel>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Compatibility" FontSize="18"/>
+                    <TextBlock Text="Compatibility" Style="{StaticResource Section}"/>
                     <TextBlock Text="{Binding Explanation}" Margin="0,6,0,6"/>
                     <TextBlock Text="{Binding Api, StringFormat=Graphics API: {0}}" Style="{StaticResource Muted}"/>
                     <TextBlock Text="{Binding AntiCheat, StringFormat=Anti-cheat: {0}}" Style="{StaticResource Muted}"/>
                     <TextBlock Text="{Binding Game.Record.ExecutablePath, StringFormat=Executable: {0}}" Style="{StaticResource Muted}" Margin="0,4,0,0"/>
                     <TextBlock Text="{Binding Game.Record.InstallPath, StringFormat=Folder: {0}}" Style="{StaticResource Muted}"/>
                     <TextBlock Text="{Binding Game.Record.ExecutableReason, StringFormat=Selection: {0}}" Style="{StaticResource Muted}"/>
-                    <TextBlock Text="Evidence" Margin="0,10,0,4"/>
+                    <TextBlock Text="Evidence" Style="{StaticResource FieldLabel}"/>
                     <TextBlock Text="{Binding Evidence}" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Runtime" FontSize="18"/>
+                    <TextBlock Text="Runtime" Style="{StaticResource Section}"/>
                     <TextBlock Text="{Binding Activation}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-                    <TextBlock Text="Recent actions" Margin="0,10,0,4"/>
+                    <TextBlock Text="Recent actions" Style="{StaticResource FieldLabel}"/>
                     <TextBlock Text="{Binding History}" TextWrapping="Wrap" Style="{StaticResource Muted}"/>
                 </StackPanel>
             </Border>

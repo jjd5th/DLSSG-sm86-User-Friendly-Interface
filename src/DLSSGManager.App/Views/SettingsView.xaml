@@ -6,7 +6,7 @@
             <TextBlock Text="Settings" Style="{StaticResource Title}" Margin="0,0,0,12"/>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Discovery" FontSize="18"/>
+                    <TextBlock Text="Discovery" Style="{StaticResource Section}"/>
                     <CheckBox Content="Scan on startup" IsChecked="{Binding Settings.ScanOnStartup}"/>
                     <CheckBox Content="Steam" IsChecked="{Binding Settings.DiscoverSteam}"/>
                     <CheckBox Content="Epic Games" IsChecked="{Binding Settings.DiscoverEpic}"/>
@@ -15,7 +15,7 @@
                     <CheckBox Content="EA App" IsChecked="{Binding Settings.DiscoverEa}"/>
                     <CheckBox Content="Ubisoft Connect" IsChecked="{Binding Settings.DiscoverUbisoft}"/>
                     <CheckBox Content="Battle.net" IsChecked="{Binding Settings.DiscoverBattleNet}"/>
-                    <TextBlock Text="Custom folders" Margin="0,8,0,4"/>
+                    <TextBlock Text="Custom folders" Style="{StaticResource FieldLabel}"/>
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="Remove" Style="{StaticResource SecondaryButton}" Command="{Binding RemoveFolderCommand}"/>
                         <Button DockPanel.Dock="Right" Content="Add" Style="{StaticResource SecondaryButton}" Command="{Binding AddFolderCommand}"/>
@@ -25,36 +25,37 @@
             </Border>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Updates" FontSize="18"/>
+                    <TextBlock Text="Updates" Style="{StaticResource Section}"/>
                     <CheckBox Content="Check GitHub on startup" IsChecked="{Binding Settings.CheckUpdatesOnStartup}"/>
                     <CheckBox Content="Include prerelease mod builds" IsChecked="{Binding Settings.IncludePrerelease}"/>
-                    <TextBlock Text="Pinned mod version (blank uses the newest stable)" Margin="0,8,0,4"/>
+                    <TextBlock Text="Pinned mod version (blank uses the newest stable)" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding Settings.PinnedModVersion, UpdateSourceTrigger=PropertyChanged}"/>
-                    <TextBlock Text="Default configuration preset" Margin="0,8,0,4"/>
+                    <TextBlock Text="Default configuration preset" Style="{StaticResource FieldLabel}"/>
                     <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding Settings.DefaultPreset}"/>
                 </StackPanel>
             </Border>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Storage" FontSize="18"/>
-                    <TextBlock Text="Backup folder" Margin="0,8,0,4"/>
+                    <TextBlock Text="Storage" Style="{StaticResource Section}"/>
+                    <TextBlock Text="Backup folder" Style="{StaticResource FieldLabel}"/>
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="Browse" Style="{StaticResource SecondaryButton}" Command="{Binding BrowseBackupCommand}"/>
                         <TextBox Text="{Binding Settings.BackupDirectory, UpdateSourceTrigger=PropertyChanged}"/>
                     </DockPanel>
-                    <TextBlock Text="Update cache" Margin="0,8,0,4"/>
+                    <TextBlock Text="Update cache" Style="{StaticResource FieldLabel}"/>
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="Browse" Style="{StaticResource SecondaryButton}" Command="{Binding BrowseCacheCommand}"/>
                         <TextBox Text="{Binding Settings.CacheDirectory, UpdateSourceTrigger=PropertyChanged}"/>
                     </DockPanel>
-                    <TextBlock Text="Log retention (days)" Margin="0,8,0,4"/>
+                    <TextBlock Text="Log retention (days)" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding Settings.LogRetentionDays}"/>
                 </StackPanel>
             </Border>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Appearance and logging" FontSize="18"/>
-                    <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Settings.Theme}" Margin="0,8,0,8"/>
+                    <TextBlock Text="Appearance and logging" Style="{StaticResource Section}"/>
+                    <TextBlock Text="Theme" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Settings.Theme}"/>
                     <CheckBox Content="Write diagnostic logs" IsChecked="{Binding Settings.DiagnosticLogging}"/>
                     <Button Content="Save settings" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" Margin="0,12,0,0" HorizontalAlignment="Left"/>
                 </StackPanel>

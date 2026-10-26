@@ -12,47 +12,47 @@
             <Button Content="Save" Style="{StaticResource PrimaryButton}" Click="OnSave"/>
             <Button Content="Cancel" Style="{StaticResource SecondaryButton}" IsCancel="True"/>
         </StackPanel>
-        <TabControl>
+        <TabControl Margin="0,0,0,8">
             <TabItem Header="Basic">
-                <StackPanel Margin="12">
+                <StackPanel>
                     <TextBlock x:Name="ReleaseText" Style="{StaticResource Muted}"/>
-                    <CheckBox x:Name="EnabledBox" Content="Enable the modification" Margin="0,12,0,8"/>
-                    <TextBlock Text="Optimization level"/>
-                    <ComboBox x:Name="OptimizedBox" SelectionChanged="OnOptimized" Margin="0,4,0,4"/>
-                    <TextBlock x:Name="OptimizedHelp" TextWrapping="Wrap" Style="{StaticResource Muted}"/>
-                    <TextBlock Text="Logging level" Margin="0,12,0,4"/>
+                    <CheckBox x:Name="EnabledBox" Content="Enable the modification" Margin="0,12,0,4"/>
+                    <TextBlock Text="Optimization level" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="OptimizedBox" SelectionChanged="OnOptimized"/>
+                    <TextBlock x:Name="OptimizedHelp" TextWrapping="Wrap" Style="{StaticResource Muted}" Margin="0,6,0,0"/>
+                    <TextBlock Text="Logging level" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="LogBox"/>
-                    <TextBlock Text="Changing the installed release is done with Update, not this editor." Margin="0,12,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="Changing the installed release is done with Update, not this editor." Margin="0,12,0,0" TextWrapping="Wrap" Style="{StaticResource Muted}"/>
                 </StackPanel>
             </TabItem>
             <TabItem Header="Frame generation">
-                <StackPanel Margin="12" x:Name="MultiplierPanel">
-                    <TextBlock Text="Generated-frame ceiling" FontSize="16"/>
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,0,8" Text="2× is one generated frame, 3× is two, 4× is three, and 6× is five. A multiplier is shown only when this release and this game support it."/>
-                    <TextBlock Text="Engine" Margin="0,8,0,4"/>
+                <StackPanel x:Name="MultiplierPanel">
+                    <TextBlock Text="Generated-frame ceiling" Style="{StaticResource Section}"/>
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,4" Text="2× is one generated frame, 3× is two, 4× is three, and 6× is five. A multiplier is shown only when this release and this game support it."/>
+                    <TextBlock Text="Engine" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="EngineBox"/>
-                    <TextBlock Text="DLSS preset" Margin="0,8,0,4"/>
+                    <TextBlock Text="DLSS preset" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="PresetBox"/>
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Text="Auto lets the game decide. C is FG Lite: lower GPU time and slightly lower image quality, and it needs runtime 310.9.16. B only helps when the game provides a HUD-less image and a UI plane."/>
-                    <TextBlock Text="Super Resolution INT8" Margin="0,8,0,4"/>
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,0" Text="Auto lets the game decide. C is FG Lite: lower GPU time and slightly lower image quality, and it needs runtime 310.9.16. B only helps when the game provides a HUD-less image and a UI plane."/>
+                    <TextBlock Text="Super Resolution INT8" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="SrBox"/>
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Text="Off leaves DLSS Super Resolution alone. On swaps preset L or M quality modes to this project's INT8 kernels on RTX 20 and 30. It needs the sr files from the full package."/>
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,0" Text="Off leaves DLSS Super Resolution alone. On swaps preset L or M quality modes to this project's INT8 kernels on RTX 20 and 30. It needs the sr files from the full package."/>
                 </StackPanel>
             </TabItem>
             <TabItem Header="Advanced">
-                <StackPanel Margin="12">
+                <StackPanel>
                     <CheckBox x:Name="TimingBox" Content="Record per-frame GPU time (FrameTiming)"/>
-                    <TextBlock Text="CatmullRomWarp (0 off, 1 five-tap, 2 nine-tap). Not part of any optimization tier." Margin="0,8,0,4" TextWrapping="Wrap"/>
+                    <TextBlock Text="CatmullRomWarp (0 off, 1 five-tap, 2 nine-tap). Not part of any optimization tier." Style="{StaticResource FieldLabel}" TextWrapping="Wrap"/>
                     <TextBox x:Name="WarpBox"/>
-                    <TextBlock Text="AccelerateNewerGpus (blank leaves the default, 0 turns the RTX 40/50 route off)" Margin="0,8,0,4" TextWrapping="Wrap"/>
+                    <TextBlock Text="AccelerateNewerGpus (blank leaves the default, 0 turns the RTX 40/50 route off)" Style="{StaticResource FieldLabel}" TextWrapping="Wrap"/>
                     <TextBox x:Name="NewerBox"/>
-                    <TextBlock Text="SpoofArchToGame (blank leaves the default)" Margin="0,8,0,4"/>
+                    <TextBlock Text="SpoofArchToGame (blank leaves the default)" Style="{StaticResource FieldLabel}"/>
                     <TextBox x:Name="SpoofBox"/>
-                    <TextBlock Text="Super Resolution tier filter" Margin="0,8,0,4"/>
+                    <TextBlock Text="Super Resolution tier filter" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="TierBox"/>
-                    <TextBlock Text="XeSS flow resolution" Margin="0,8,0,4"/>
+                    <TextBlock Text="XeSS flow resolution" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="FlowBox"/>
-                    <CheckBox x:Name="HudlessBox" Content="XeSS UseHudless"/>
+                    <CheckBox x:Name="HudlessBox" Content="XeSS UseHudless" Margin="0,12,0,0"/>
                 </StackPanel>
             </TabItem>
             <TabItem Header="Raw INI">
